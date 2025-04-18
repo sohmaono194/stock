@@ -9,6 +9,7 @@ import io
 import os
 import glob
 from bs4 import BeautifulSoup
+import calendar
 
 st.title("\U0001F4C8 株価とドル円の比較アプリ")
 
@@ -60,34 +61,45 @@ if st.button("表示"):
     except Exception as e:
         st.error(f"エラーが発生しました: {e}")
 
-# EDINET書類の種類ごとの表示
-st.subheader("\U0001F4C4 EDINET 提出書類一覧（種類で絞り込み）")
+# EDINET書類の種類ごとの表示（直近90営業日）
+st.subheader("\U0001F4C4 直近90営業日のEDINET 提出書類一覧（種類で絞り込み）")
 
 headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0",
     "Accept": "application/json",
     "Accept-Language": "ja,en;q=0.9"
 }
 
-@st.cache_data(ttl=3600)
-def get_edinet_documents(date_str):
-    url = f"https://disclosure.edinet-fsa.go.jp/api/v1/documents.json?date={date_str}"
-    res = requests.get(url, headers=headers, timeout=10)
-    if "application/json" in res.headers.get("Content-Type", ""):
-        return res.json().get("results", [])
-    return []
+@st.cache_data(ttl=86400)
+def fetch_documents_last_90_days(selected_types):
+    results = []
+    checked = 0
+    date = datetime.today()
+    while len(results) < 1000 and checked < 180:  # 最大180日分確認（平日のみ）
+        date -= timedelta(days=1)
+        if date.weekday() >= 5:
+            continue  # 土日スキップ
+        date_str = date.strftime("%Y-%m-%d")
+        url = f"https://disclosure.edinet-fsa.go.jp/api/v1/documents.json?date={date_str}"
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+            if "application/json" in res.headers.get("Content-Type", ""):
+                day_docs = res.json().get("results", [])
+                for doc in day_docs:
+                    desc = doc.get("docDescription", "")
+                    if any(t in desc for t in selected_types):
+                        doc["date"] = date_str
+                        results.append(doc)
+        except Exception:
+            pass
+        checked += 1
+    return results
 
-target_date = (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")
-docs = get_edinet_documents(target_date)
+selected_types = st.multiselect("表示する書類の種類：", ["有価証券報告書", "四半期報告書", "臨時報告書", "訂正報告書"], default=["四半期報告書"])
 
-# フィルターUI
-selected_types = st.multiselect("表示したい書類の種類を選択：", ["有価証券報告書", "四半期報告書", "臨時報告書", "訂正報告書"], default=["四半期報告書"])
-
-# 表示
-type_docs = [doc for doc in docs if any(t in doc.get("docDescription", "") for t in selected_types)]
-
-if type_docs:
-    for doc in type_docs:
-        st.write(f"📄 {doc.get('docDescription')}｜{doc.get('filerName')}｜docID: {doc.get('docID')}")
-else:
-    st.info("該当する書類が見つかりませんでした。")
+if st.button("直近提出書類を取得"):
+    with st.spinner("取得中（営業日のみを確認中）..."):
+        docs = fetch_documents_last_90_days(selected_types)
+        st.success(f"{len(docs)} 件の提出書類を取得しました。")
+        for doc in docs[:100]:  # 上位100件だけ表示
+            st.write(f"{doc['date']}｜{doc['docDescription']}｜{doc['filerName']}｜docID: {doc['docID']}")
