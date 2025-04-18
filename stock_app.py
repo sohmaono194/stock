@@ -60,90 +60,34 @@ if st.button("表示"):
     except Exception as e:
         st.error(f"エラーが発生しました: {e}")
 
-# EDINETコードのマッピング
+# EDINET書類の種類ごとの表示
+st.subheader("\U0001F4C4 EDINET 提出書類一覧（種類で絞り込み）")
+
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+    "Accept-Language": "ja,en;q=0.9"
+}
+
+@st.cache_data(ttl=3600)
+def get_edinet_documents(date_str):
+    url = f"https://disclosure.edinet-fsa.go.jp/api/v1/documents.json?date={date_str}"
+    res = requests.get(url, headers=headers, timeout=10)
+    if "application/json" in res.headers.get("Content-Type", ""):
+        return res.json().get("results", [])
+    return []
+
 target_date = (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")
-code_map = {"7203.T": "E02744", "6758.T": "E01767", "9984.T": "E06525"}
-edinet_code = code_map.get(ticker, None)
+docs = get_edinet_documents(target_date)
 
-st.subheader("\U0001F4E5 EDINETからXBRLファイルを取得と進捗度表示")
+# フィルターUI
+selected_types = st.multiselect("表示したい書類の種類を選択：", ["有価証券報告書", "四半期報告書", "臨時報告書", "訂正報告書"], default=["四半期報告書"])
 
-if edinet_code:
-    try:
-        url = f"https://disclosure.edinet-fsa.go.jp/api/v1/documents.json?date={target_date}"
-        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        res = requests.get(url, headers=headers, timeout=10)
+# 表示
+type_docs = [doc for doc in docs if any(t in doc.get("docDescription", "") for t in selected_types)]
 
-        if "application/json" not in res.headers.get("Content-Type", ""):
-            st.error("⚠️ EDINETからの応答がJSON形式ではありません。")
-            st.text(res.text[:300])
-        else:
-            data = res.json()
-            docs = data.get("results", [])
-
-            doc_id = None
-            for doc in docs:
-                if doc.get("edinetCode") == edinet_code and "四半期" in doc.get("docDescription", ""):
-                    doc_id = doc.get("docID")
-                    break
-
-            if doc_id:
-                st.success(f"四半期報告書が見つかりました！（docID: {doc_id}）")
-                zip_url = f"https://disclosure.edinet-fsa.go.jp/api/v1/documents/{doc_id}?type=1"
-                zip_res = requests.get(zip_url, timeout=15)
-                extract_path = f"edinet_download/{doc_id}"
-                os.makedirs(extract_path, exist_ok=True)
-                with zipfile.ZipFile(io.BytesIO(zip_res.content)) as z:
-                    z.extractall(extract_path)
-
-                xbrl_files = glob.glob(f"{extract_path}/*.xbrl")
-                if not xbrl_files:
-                    st.warning("XBRLファイルが見つかりませんでした。")
-                else:
-                    with open(xbrl_files[0], "r", encoding="utf-8") as file:
-                        soup = BeautifulSoup(file.read(), "lxml-xml")
-
-                    tags = {
-                        "売上高": "jppfs_cor:NetSales",
-                        "営業利益": "jppfs_cor:OperatingIncome",
-                        "経常利益": "jppfs_cor:OrdinaryIncome",
-                        "純利益": "jppfs_cor:ProfitLoss"
-                    }
-
-                    data = {}
-                    for label, tag in tags.items():
-                        current = soup.find(tag, contextRef="CurrentYTDConsolidatedDuration")
-                        forecast = soup.find(tag, contextRef="ForecastConsolidatedDuration")
-                        if current and forecast:
-                            try:
-                                current_val = float(current.text)
-                                forecast_val = float(forecast.text)
-                                progress = round(current_val / forecast_val * 100, 1)
-                                data[label] = progress
-                            except:
-                                continue
-
-                    if data:
-                        st.subheader("\U0001F4CA 四半期進捗度")
-                        for label, pct in data.items():
-                            st.write(f"{label}：{pct:.1f}%")
-                            st.progress(min(int(pct), 100))
-
-                        fig3, ax = plt.subplots(figsize=(6, 4))
-                        bars = ax.bar(data.keys(), data.values(), color='skyblue')
-                        ax.set_ylim(0, 120)
-                        ax.axhline(100, color="red", linestyle="--", label="目標達成ライン")
-                        ax.set_ylabel("進捗度（％）")
-                        ax.set_title("四半期進捗度")
-                        ax.legend()
-                        for bar, val in zip(bars, data.values()):
-                            ax.text(bar.get_x() + bar.get_width()/2, val + 2, f"{val:.1f}%", ha="center", fontsize=10)
-                        st.pyplot(fig3)
-                    else:
-                        st.warning("📉 データが抽出できませんでした。文書の構造が異なる可能性があります。")
-            else:
-                st.warning("四半期報告書のdocIDが見つかりませんでした。")
-
-    except Exception as e:
-        st.error(f"❌ 処理中にエラーが発生しました: {e}")
+if type_docs:
+    for doc in type_docs:
+        st.write(f"📄 {doc.get('docDescription')}｜{doc.get('filerName')}｜docID: {doc.get('docID')}")
 else:
-    st.warning("この証券コードはEDINET対応表に登録されていません。")
+    st.info("該当する書類が見つかりませんでした。")
