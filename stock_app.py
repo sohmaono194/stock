@@ -16,9 +16,9 @@ st.title("📄 EDINET提出書類から財務情報を抽出・可視化する�
 # ============================
 
 def extract_xbrl_from_zip(doc_id):
-    url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}?type=1"
-    headers = {"Ocp-Apim-Subscription-Key": API_KEY}
-    res = requests.get(url, headers=headers, timeout=20)
+    url = f"https://disclosure.edinet-fsa.go.jp/api/v1/documents/{doc_id}"
+    params = {"type": 1}
+    res = requests.get(url, params=params, timeout=20, verify=False)
 
     content_type = res.headers.get("Content-Type", "")
     if "zip" in content_type:
@@ -77,11 +77,10 @@ def list_all_financial_tags(xbrl_text):
     return sorted(tags)
 
 # ============================
-# 🔍 EDINETから最新docIDを取得
+# 🔍 EDINETから最新docIDを取得（メタデータ含む）
 # ============================
 
 def fetch_recent_doc_ids(limit=20):
-    headers = {"Ocp-Apim-Subscription-Key": API_KEY}
     results = []
     checked = 0
     date = datetime.today()
@@ -90,12 +89,15 @@ def fetch_recent_doc_ids(limit=20):
         date -= timedelta(days=1)
         if date.weekday() >= 5:
             continue
-        url = f"https://api.edinet-fsa.go.jp/api/v2/documents.json?date={date.strftime('%Y-%m-%d')}"
+
+        url = "https://disclosure.edinet-fsa.go.jp/api/v1/documents.json"
+        params = {"date": date.strftime('%Y-%m-%d'), "type": 2}
+
         try:
-            res = requests.get(url, headers=headers, timeout=10)
+            res = requests.get(url, params=params, timeout=10, verify=False)
             docs = res.json().get("results", [])
             for doc in docs:
-                if doc.get("docTypeCode") == "120" and doc.get("xbrlFlag") == "1":
+                if doc.get("xbrlFlag") == "1":
                     results.append({
                         "date": date.strftime('%Y-%m-%d'),
                         "docID": doc.get("docID"),
@@ -104,8 +106,8 @@ def fetch_recent_doc_ids(limit=20):
                     })
                     if len(results) >= limit:
                         break
-        except:
-            pass
+        except Exception as e:
+            st.warning(f"{date.strftime('%Y-%m-%d')} の取得失敗: {e}")
         checked += 1
     return results
 
@@ -143,7 +145,7 @@ if st.button("🔍 全財務タグを表示"):
             except Exception as e:
                 st.error(f"エラーが発生しました: {e}")
 
-st.header("📄 最新のEDINET提出書類（docID一覧）")
+st.header("📄 最新のEDINET提出書類（XBRLありdocID一覧）")
 if st.button("📥 直近のdocIDを取得"):
     with st.spinner("最新提出書類を取得中..."):
         docs = fetch_recent_doc_ids(limit=30)
@@ -151,4 +153,4 @@ if st.button("📥 直近のdocIDを取得"):
             for d in docs:
                 st.write(f"{d['date']}｜{d['filerName']}｜{d['docDescription']}｜docID: {d['docID']}")
         else:
-            st.warning("docIDが取得できませんでした。APIキーや接続をご確認ください。")
+            st.warning("docIDが取得できませんでした。通信環境や日付を確認してください。")
