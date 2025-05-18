@@ -3,4 +3,7 @@ yfinance
 pandas
 matplotlib
 seaborn
+beautifulsoup4
+requests
+chardet
 
