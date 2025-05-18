@@ -1,55 +1,105 @@
 import streamlit as st
 import requests
+import zipfile
+import io
+import xml.etree.ElementTree as ET
 import os
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
 
-# .envからAPIキー読み込み
+# --- APIキーの読み込み ---
 load_dotenv()
 API_KEY = os.getenv("EDINET_API_KEY")
 
-st.title("📄 企業名からEDINET docIDを自動取得")
+st.title("📄 EDINET提出書類から財務情報を抽出・可視化するアプリ")
 
-# 企業名を入力
-company_name = st.text_input("企業名を入力してください（例: トヨタ）")
+# ============================
+# 🧩 docID ZIP → XBRL読み取り
+# ============================
 
-def get_docid_by_company_name(company_name):
-    results = []
-    headers = {
-        "Ocp-Apim-Subscription-Key": API_KEY
+def extract_xbrl_from_zip(doc_id):
+    url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}?type=1"
+    headers = {"Ocp-Apim-Subscription-Key": API_KEY}
+    res = requests.get(url, headers=headers, timeout=20)
+
+    if "zip" not in res.headers.get("Content-Type", ""):
+        raise ValueError("ZIPファイルではありません")
+
+    with zipfile.ZipFile(io.BytesIO(res.content)) as z:
+        for file_name in z.namelist():
+            if file_name.endswith(".xbrl"):
+                with z.open(file_name) as xbrl_file:
+                    return xbrl_file.read().decode("utf-8")
+    raise FileNotFoundError("XBRLファイルが見つかりませんでした")
+
+# ============================
+# 🔍 XBRLから数値を抽出
+# ============================
+
+def extract_financial_data_from_xbrl(xbrl_text):
+    root = ET.fromstring(xbrl_text)
+    ns = {"jp": "http://www.xbrl.go.jp/jp/fr/gaap/2023-03-31"}  # 年度により要変更
+
+    items = {
+        "売上高": ["jp:NetSales", "jp:OperatingRevenue"],
+        "営業利益": ["jp:OperatingIncome"],
+        "経常利益": ["jp:OrdinaryIncome"],
+        "純利益": ["jp:ProfitAttributableToOwnersOfParent", "jp:NetIncome"]
     }
 
-    # 今日の日付から180日分を確認
-    date = datetime.today()
-    for i in range(180):
-        date -= timedelta(days=1)
-        if date.weekday() >= 5:
-            continue  # 土日スキップ
-        date_str = date.strftime("%Y-%m-%d")
-        url = f"https://api.edinet-fsa.go.jp/api/v2/documents.json?date={date_str}"
-        
-        try:
-            res = requests.get(url, headers=headers, timeout=10)
-            if "application/json" in res.headers.get("Content-Type", ""):
-                day_docs = res.json().get("results", [])
-                for doc in day_docs:
-                    if company_name in doc.get("filerName", ""):
-                        doc["date"] = date_str
-                        results.append(doc)
-        except Exception as e:
-            st.warning(f"エラー発生：{e}")
-
+    results = {}
+    for key, tags in items.items():
+        for tag in tags:
+            elem = root.find(f".//{tag}", ns)
+            if elem is not None and elem.text:
+                results[key] = elem.text
+                break
+        if key not in results:
+            results[key] = "取得失敗"
     return results
 
-if st.button("企業名からdocIDを取得"):
-    if not company_name:
-        st.warning("企業名を入力してください！")
+# ============================
+# 🔍 全財務タグ一覧表示
+# ============================
+
+def list_all_financial_tags(xbrl_text):
+    root = ET.fromstring(xbrl_text)
+    tags = set()
+    for elem in root.iter():
+        if elem.tag.startswith("{http://www.xbrl.go.jp/jp/fr/gaap"):
+            tag_clean = elem.tag.split("}")[-1]
+            tags.add(tag_clean)
+    return sorted(tags)
+
+# ============================
+# Streamlit UI
+# ============================
+
+st.header("📥 docIDを入力して財務情報を取得")
+doc_id = st.text_input("EDINETのdocIDを入力（例: S100UP32）")
+
+if st.button("財務データを抽出"):
+    if not doc_id:
+        st.warning("docIDを入力してください")
     else:
-        with st.spinner("docIDを取得中..."):
-            docs = get_docid_by_company_name(company_name)
-            if docs:
-                st.success(f"{len(docs)} 件のdocIDが見つかりました！")
-                for doc in docs[:100]:
-                    st.write(f"📅 {doc['date']}｜{doc['docDescription']}｜docID: {doc['docID']}")
-            else:
-                st.warning("該当するdocIDが見つかりませんでした。")
+        with st.spinner("データ抽出中..."):
+            try:
+                xbrl_text = extract_xbrl_from_zip(doc_id)
+                data = extract_financial_data_from_xbrl(xbrl_text)
+                st.success("✅ 抽出成功！")
+                for k, v in data.items():
+                    st.write(f"{k}: {v}")
+            except Exception as e:
+                st.error(f"エラーが発生しました: {e}")
+
+if st.button("🔍 全財務タグを表示"):
+    if not doc_id:
+        st.warning("docIDを入力してください")
+    else:
+        with st.spinner("タグ抽出中..."):
+            try:
+                xbrl_text = extract_xbrl_from_zip(doc_id)
+                tags = list_all_financial_tags(xbrl_text)
+                st.success(f"📄 タグ数: {len(tags)} 件")
+                st.code("\n".join(tags))
+            except Exception as e:
+                st.error(f"エラーが発生しました: {e}")
