@@ -8,24 +8,42 @@ import chardet
 import os
 from datetime import datetime, timedelta
 
-# --- APIキーの読み込み ---
 API_KEY = os.environ.get("EDINET_API_KEY")
 
-st.title("📄 EDINET提出書類からXBRL・CSVを抽出・可視化するアプリ")
+st.title("📊 企業名からEDINET財務データを自動取得・可視化")
 
 # ============================
-# ✅ CSVファイルをAPIから取得
+# 🔍 指定日の提出書類から企業名で検索
 # ============================
+def search_docid_by_company_name(company_name, days_back=90):
+    date = datetime.today()
+    headers = {"Ocp-Apim-Subscription-Key": API_KEY}
+    for _ in range(days_back):
+        date -= timedelta(days=1)
+        if date.weekday() >= 5:
+            continue
+        url = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
+        params = {"date": date.strftime('%Y-%m-%d'), "type": 2}
+        try:
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            for doc in res.json().get("results", []):
+                name = doc.get("filerName", "")
+                if company_name in name and doc.get("csvFlag") == "1":
+                    return doc.get("docID"), name, doc.get("docDescription")
+        except:
+            continue
+    return None, None, None
 
+# ============================
+# 📥 docID → CSV取得
+# ============================
 def fetch_csv_from_docid(doc_id):
     url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}"
     headers = {"Ocp-Apim-Subscription-Key": API_KEY}
-    params = {"type": 5}  # CSVファイル要求
+    params = {"type": 5}
     res = requests.get(url, headers=headers, params=params, timeout=20)
-
     if "zip" not in res.headers.get("Content-Type", ""):
-        raise ValueError("このdocIDにはCSVファイルが存在しません（ZIP形式で提供されていない可能性があります）")
-
+        raise ValueError("このdocIDにはCSVが存在しません")
     with zipfile.ZipFile(io.BytesIO(res.content)) as z:
         for file_name in z.namelist():
             if file_name.endswith(".csv"):
@@ -33,66 +51,44 @@ def fetch_csv_from_docid(doc_id):
                     raw = f.read()
                     encoding = chardet.detect(raw)["encoding"]
                     return pd.read_csv(io.BytesIO(raw), encoding=encoding), file_name
-    raise FileNotFoundError("ZIP内にCSVファイルが見つかりませんでした。")
+    raise FileNotFoundError("CSVファイルがZIPに見つかりません")
 
 # ============================
-# ✅ CSVファイル取得可能なdocID一覧を取得
+# 📊 財務指標抽出（例: 売上、営業利益）
 # ============================
-
-def fetch_csv_doc_ids(limit=20):
-    results = []
-    checked = 0
-    date = datetime.today()
-
-    while len(results) < limit and checked < 90:
-        date -= timedelta(days=1)
-        if date.weekday() >= 5:
-            continue
-
-        url = "https://disclosure.edinet-fsa.go.jp/api/v1/documents.json"
-        params = {"date": date.strftime('%Y-%m-%d'), "type": 2}
-
-        try:
-            res = requests.get(url, params=params, timeout=10, verify=False)
-            docs = res.json().get("results", [])
-            for doc in docs:
-                if doc.get("csvFlag") == "1":
-                    results.append({
-                        "date": date.strftime('%Y-%m-%d'),
-                        "docID": doc.get("docID"),
-                        "filerName": doc.get("filerName"),
-                        "docDescription": doc.get("docDescription")
-                    })
-                    if len(results) >= limit:
-                        break
-        except Exception as e:
-            st.warning(f"{date.strftime('%Y-%m-%d')} の取得失敗: {e}")
-        checked += 1
-    return results
+def extract_financial_metrics(df):
+    keywords = ["NetSales", "OperatingIncome", "OrdinaryIncome", "NetIncome"]
+    extracted = {}
+    for kw in keywords:
+        candidates = df[df["項目ID"].str.contains(kw, na=False)]
+        if not candidates.empty:
+            val = candidates.iloc[0].get("金額", "")
+            extracted[kw] = val
+    return extracted
 
 # ============================
-# Streamlit UI - CSV関連機能
+# Streamlit UI
 # ============================
+st.header("🔍 企業名からdocIDを自動検索 & 財務データ表示")
+company = st.text_input("企業名を入力（例: トヨタ自動車）")
 
-st.header("📄 EDINET CSVファイル取得（type=5）")
-if st.button("📥 CSV取得可能なdocIDを表示"):
-    with st.spinner("CSV対応書類を検索中..."):
-        docs = fetch_csv_doc_ids(limit=20)
-        if docs:
-            for d in docs:
-                st.write(f"{d['date']}｜{d['filerName']}｜{d['docDescription']}｜docID: {d['docID']}")
-        else:
-            st.warning("取得できるdocIDが見つかりませんでした。")
-
-csv_doc_id = st.text_input("📥 CSV取得用のdocIDを入力してください：")
-if st.button("CSVを取得して表示"):
-    if not csv_doc_id:
-        st.warning("docIDを入力してください")
+if st.button("検索して財務データ表示"):
+    if not company:
+        st.warning("企業名を入力してください")
     else:
-        with st.spinner("CSVデータを取得中..."):
-            try:
-                df, fname = fetch_csv_from_docid(csv_doc_id)
-                st.success(f"✅ CSV取得成功: {fname}")
-                st.dataframe(df.head(30))
-            except Exception as e:
-                st.error(f"エラーが発生しました: {e}")
+        with st.spinner("EDINETでdocID検索中..."):
+            doc_id, name, desc = search_docid_by_company_name(company)
+            if not doc_id:
+                st.error("該当する企業のCSV対応docIDが見つかりませんでした")
+            else:
+                st.success(f"✅ 見つかりました：{name}｜{desc}｜docID: {doc_id}")
+                try:
+                    df, fname = fetch_csv_from_docid(doc_id)
+                    st.write(f"📁 ファイル名: {fname}")
+                    st.dataframe(df.head(30))
+                    metrics = extract_financial_metrics(df)
+                    st.subheader("📈 抽出された財務指標")
+                    for k, v in metrics.items():
+                        st.write(f"{k}: {v}")
+                except Exception as e:
+                    st.error(f"CSV取得・解析でエラーが発生しました: {e}")
