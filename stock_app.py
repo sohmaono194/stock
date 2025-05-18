@@ -3,6 +3,8 @@ import requests
 import zipfile
 import io
 import xml.etree.ElementTree as ET
+import pandas as pd
+import chardet
 import os
 from datetime import datetime, timedelta
 
@@ -38,12 +40,35 @@ def extract_xbrl_from_zip(doc_id):
         raise ValueError(f"未知のファイル形式です（Content-Type: {content_type}）")
 
 # ============================
+# 📥 docID → CSV読み込み（API v2）
+# ============================
+
+def fetch_csv_from_docid(doc_id):
+    url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}"
+    headers = {"Ocp-Apim-Subscription-Key": API_KEY}
+    params = {"type": 5}  # CSV取得
+    res = requests.get(url, headers=headers, params=params, timeout=20)
+
+    content_type = res.headers.get("Content-Type", "")
+    if "zip" not in content_type:
+        raise ValueError(f"CSVファイルではありません（Content-Type: {content_type}）")
+
+    with zipfile.ZipFile(io.BytesIO(res.content)) as z:
+        for file_name in z.namelist():
+            if file_name.endswith(".csv"):
+                with z.open(file_name) as f:
+                    raw = f.read()
+                    encoding = chardet.detect(raw)["encoding"]
+                    return pd.read_csv(io.BytesIO(raw), encoding=encoding), file_name
+    raise FileNotFoundError("CSVファイルがZIP内に見つかりませんでした。")
+
+# ============================
 # 🔍 XBRLから数値を抽出
 # ============================
 
 def extract_financial_data_from_xbrl(xbrl_text):
     root = ET.fromstring(xbrl_text)
-    ns = {"jp": "http://www.xbrl.go.jp/jp/fr/gaap/2023-03-31"}  # 年度により要変更
+    ns = {"jp": "http://www.xbrl.go.jp/jp/fr/gaap/2023-03-31"}
 
     items = {
         "売上高": ["jp:NetSales", "jp:OperatingRevenue"],
@@ -166,3 +191,18 @@ if st.button("📥 直近のdocIDを取得"):
                 st.write(f"{d['date']}｜{d['filerName']}｜{d['docDescription']}｜docID: {d['docID']}")
         else:
             st.warning("docIDが取得できませんでした。通信環境や日付を確認してください。")
+
+st.header("📊 docIDからCSV財務データ取得（API経由）")
+csv_doc_id = st.text_input("CSVファイルを取得するdocID（例: S100UP32）")
+
+if st.button("CSVを取得＆表示"):
+    if not csv_doc_id:
+        st.warning("docIDを入力してください。")
+    else:
+        with st.spinner("CSVデータ取得中..."):
+            try:
+                df, fname = fetch_csv_from_docid(csv_doc_id)
+                st.success(f"✅ CSV取得成功: {fname}")
+                st.dataframe(df.head(30))
+            except Exception as e:
+                st.error(f"エラーが発生しました: {e}")
