@@ -4,11 +4,9 @@ import zipfile
 import io
 import xml.etree.ElementTree as ET
 import os
-from dotenv import load_dotenv
 
-# --- APIキーの読み込み ---
-load_dotenv()
-API_KEY = os.getenv("EDINET_API_KEY")
+# --- APIキーの読み込み（Streamlit Cloudでは環境変数から直接取得） ---
+API_KEY = os.environ.get("EDINET_API_KEY")
 
 st.title("📄 EDINET提出書類から財務情報を抽出・可視化するアプリ")
 
