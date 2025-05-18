@@ -33,10 +33,9 @@ def extract_xbrl_from_zip(doc_id):
     elif "html" in content_type:
         raise ValueError("このdocIDはHTML形式です。無効または公開期限切れの可能性があります。")
     elif "json" in content_type:
-        raise ValueError("このdocIDはダウンロード可能なファイル形式ではなく、JSON形式のレスポンスです。")
+        raise ValueError("このdocIDはXBRL等のファイルを提供していません。別のdocIDをお試しください。")
     else:
         raise ValueError(f"未知のファイル形式です（Content-Type: {content_type}）")
-
 
 # ============================
 # 🔍 XBRLから数値を抽出
@@ -96,7 +95,7 @@ def fetch_recent_doc_ids(limit=20):
             res = requests.get(url, headers=headers, timeout=10)
             docs = res.json().get("results", [])
             for doc in docs:
-                if doc.get("docTypeCode") == "120":  # 有価証券報告書など主要書類のみ
+                if doc.get("docTypeCode") == "120" and doc.get("xbrlFlag") == "1":
                     results.append({
                         "date": date.strftime('%Y-%m-%d'),
                         "docID": doc.get("docID"),
