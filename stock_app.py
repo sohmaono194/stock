@@ -32,8 +32,11 @@ def extract_xbrl_from_zip(doc_id):
         raise ValueError("このdocIDはPDFファイルであり、XBRLデータは含まれていません。")
     elif "html" in content_type:
         raise ValueError("このdocIDはHTML形式です。無効または公開期限切れの可能性があります。")
+    elif "json" in content_type:
+        raise ValueError("このdocIDはダウンロード可能なファイル形式ではなく、JSON形式のレスポンスです。")
     else:
         raise ValueError(f"未知のファイル形式です（Content-Type: {content_type}）")
+
 
 # ============================
 # 🔍 XBRLから数値を抽出
