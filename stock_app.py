@@ -4,6 +4,7 @@ import zipfile
 import io
 import xml.etree.ElementTree as ET
 import os
+from datetime import datetime, timedelta
 
 # --- APIキーの読み込み（Streamlit Cloudでは環境変数から直接取得） ---
 API_KEY = os.environ.get("EDINET_API_KEY")
@@ -19,15 +20,20 @@ def extract_xbrl_from_zip(doc_id):
     headers = {"Ocp-Apim-Subscription-Key": API_KEY}
     res = requests.get(url, headers=headers, timeout=20)
 
-    if "zip" not in res.headers.get("Content-Type", ""):
-        raise ValueError("ZIPファイルではありません")
-
-    with zipfile.ZipFile(io.BytesIO(res.content)) as z:
-        for file_name in z.namelist():
-            if file_name.endswith(".xbrl"):
-                with z.open(file_name) as xbrl_file:
-                    return xbrl_file.read().decode("utf-8")
-    raise FileNotFoundError("XBRLファイルが見つかりませんでした")
+    content_type = res.headers.get("Content-Type", "")
+    if "zip" in content_type:
+        with zipfile.ZipFile(io.BytesIO(res.content)) as z:
+            for file_name in z.namelist():
+                if file_name.endswith(".xbrl"):
+                    with z.open(file_name) as xbrl_file:
+                        return xbrl_file.read().decode("utf-8")
+        raise FileNotFoundError("XBRLファイルが見つかりませんでした")
+    elif "pdf" in content_type:
+        raise ValueError("このdocIDはPDFファイルであり、XBRLデータは含まれていません。")
+    elif "html" in content_type:
+        raise ValueError("このdocIDはHTML形式です。無効または公開期限切れの可能性があります。")
+    else:
+        raise ValueError(f"未知のファイル形式です（Content-Type: {content_type}）")
 
 # ============================
 # 🔍 XBRLから数値を抽出
@@ -69,6 +75,39 @@ def list_all_financial_tags(xbrl_text):
     return sorted(tags)
 
 # ============================
+# 🔍 EDINETから最新docIDを取得
+# ============================
+
+def fetch_recent_doc_ids(limit=20):
+    headers = {"Ocp-Apim-Subscription-Key": API_KEY}
+    results = []
+    checked = 0
+    date = datetime.today()
+
+    while len(results) < limit and checked < 60:
+        date -= timedelta(days=1)
+        if date.weekday() >= 5:
+            continue
+        url = f"https://api.edinet-fsa.go.jp/api/v2/documents.json?date={date.strftime('%Y-%m-%d')}"
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+            docs = res.json().get("results", [])
+            for doc in docs:
+                if doc.get("docTypeCode") == "120":  # 有価証券報告書など主要書類のみ
+                    results.append({
+                        "date": date.strftime('%Y-%m-%d'),
+                        "docID": doc.get("docID"),
+                        "filerName": doc.get("filerName"),
+                        "docDescription": doc.get("docDescription")
+                    })
+                    if len(results) >= limit:
+                        break
+        except:
+            pass
+        checked += 1
+    return results
+
+# ============================
 # Streamlit UI
 # ============================
 
@@ -101,3 +140,13 @@ if st.button("🔍 全財務タグを表示"):
                 st.code("\n".join(tags))
             except Exception as e:
                 st.error(f"エラーが発生しました: {e}")
+
+st.header("📄 最新のEDINET提出書類（docID一覧）")
+if st.button("📥 直近のdocIDを取得"):
+    with st.spinner("最新提出書類を取得中..."):
+        docs = fetch_recent_doc_ids(limit=30)
+        if docs:
+            for d in docs:
+                st.write(f"{d['date']}｜{d['filerName']}｜{d['docDescription']}｜docID: {d['docID']}")
+        else:
+            st.warning("docIDが取得できませんでした。APIキーや接続をご確認ください。")
