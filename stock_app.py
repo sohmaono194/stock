@@ -77,7 +77,19 @@ def list_all_financial_tags(xbrl_text):
     return sorted(tags)
 
 # ============================
-# 🔍 EDINETから最新docIDを取得（メタデータ含む）
+# ✅ docIDがZIPファイルかチェック
+# ============================
+
+def is_zip_doc(doc_id):
+    url = f"https://disclosure.edinet-fsa.go.jp/api/v1/documents/{doc_id}"
+    try:
+        res = requests.get(url, params={"type": 1}, timeout=10, verify=False)
+        return "zip" in res.headers.get("Content-Type", "")
+    except:
+        return False
+
+# ============================
+# 🔍 EDINETから最新docIDを取得（ZIP形式のみ）
 # ============================
 
 def fetch_recent_doc_ids(limit=20):
@@ -85,7 +97,7 @@ def fetch_recent_doc_ids(limit=20):
     checked = 0
     date = datetime.today()
 
-    while len(results) < limit and checked < 60:
+    while len(results) < limit and checked < 90:
         date -= timedelta(days=1)
         if date.weekday() >= 5:
             continue
@@ -97,7 +109,7 @@ def fetch_recent_doc_ids(limit=20):
             res = requests.get(url, params=params, timeout=10, verify=False)
             docs = res.json().get("results", [])
             for doc in docs:
-                if doc.get("xbrlFlag") == "1":
+                if doc.get("xbrlFlag") == "1" and is_zip_doc(doc["docID"]):
                     results.append({
                         "date": date.strftime('%Y-%m-%d'),
                         "docID": doc.get("docID"),
