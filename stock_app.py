@@ -6,13 +6,16 @@ import pandas as pd
 import chardet
 import os
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
 
+# .env から環境変数を読み込み
+load_dotenv()
 API_KEY = os.environ.get("EDINET_API_KEY")
 
 st.title("\U0001F4CA 企業名からEDINET財務データを自動取得・可視化")
 
 if not API_KEY:
-    st.error("APIキーが設定されていません。環境変数 'EDINET_API_KEY' を確認してください。")
+    st.error("APIキーが設定されていません。`.env` ファイルまたは環境変数 'EDINET_API_KEY' を確認してください。")
     st.stop()
 
 # ----------------------------
