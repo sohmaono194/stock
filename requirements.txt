@@ -6,4 +6,4 @@ seaborn
 beautifulsoup4
 requests
 chardet
-
+python-dotenv
