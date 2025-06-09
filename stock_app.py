@@ -98,7 +98,7 @@ if st.button("検索して財務データ表示"):
         st.warning("企業名を入力してください")
     else:
         with st.spinner("EDINETでdocID検索中..."):
-            doc_id, name, desc = search_docid_by_company_name(company)
+            doc_id, name, desc = search_quarterly_docid(company)    
             if not doc_id:
                 st.error("該当する企業のdocIDが見つかりませんでした（CSV対応でない可能性あり）")
             else:
