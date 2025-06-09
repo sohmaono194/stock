@@ -21,36 +21,34 @@ if not API_KEY:
 # ----------------------------
 # docIDを企業名で検索
 # ----------------------------
-def search_quarterly_docid(company_name, days_back=180):
+def search_quarterly_docid(company_name, days_back=90):
     date = datetime.today()
     headers = {"Ocp-Apim-Subscription-Key": API_KEY}
-    found_docs = []
-    
+
     for _ in range(days_back):
         date -= timedelta(days=1)
         if date.weekday() >= 5:
             continue
+
         url = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
         params = {"date": date.strftime('%Y-%m-%d'), "type": 2}
         try:
             res = requests.get(url, headers=headers, params=params, timeout=10)
             res.raise_for_status()
+
             for doc in res.json().get("results", []):
                 name = doc.get("filerName", "")
-                desc = doc.get("docDescription", "")
                 doc_type = doc.get("docTypeCode", "")
-                if company_name in name and doc_type == "140":
-                    found_docs.append((doc.get("docID"), name, desc, date.strftime('%Y-%m-%d')))
-        except Exception:
+                desc = doc.get("docDescription", "")
+                # ✅ 柔軟な一致 + 四半期報告書（docTypeCode="140"）だけ
+                if (company_name in name or name in company_name) and doc_type == "140":
+                    return doc.get("docID"), name, desc
+
+        except Exception as e:
+            print(f"[DEBUG] {e}")
             continue
 
-    if found_docs:
-        # 最新日付のものを返す
-        found_docs.sort(key=lambda x: x[3], reverse=True)
-        return found_docs[0][0], found_docs[0][1], found_docs[0][2]
-    
     return None, None, None
-
 
 # ----------------------------
 # docIDからCSVを取得・読込
@@ -98,7 +96,7 @@ if st.button("検索して財務データ表示"):
         st.warning("企業名を入力してください")
     else:
         with st.spinner("EDINETでdocID検索中..."):
-            doc_id, name, desc = search_quarterly_docid(company)    
+            doc_id, name, desc = search_quarterly_docid(company)  
             if not doc_id:
                 st.error("該当する企業のdocIDが見つかりませんでした（CSV対応でない可能性あり）")
             else:
