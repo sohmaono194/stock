@@ -15,7 +15,7 @@ API_KEY = os.environ.get("EDINET_API_KEY")
 st.title("📊 企業名からEDINET財務データを自動取得・可視化")
 
 if not API_KEY:
-    st.error("APIキーが設定されていません。.env ファイルまたは環境変数 'EDINET_API_KEY' を確認してください。")
+    st.error("APIキーが設定されていません。`.env` ファイルまたは環境変数 'EDINET_API_KEY' を確認してください。")
     st.stop()
 
 # ----------------------------
@@ -109,4 +109,4 @@ if st.button("検索して財務データ表示"):
                         result_df = pd.DataFrame(rows)
                         st.table(result_df)
                 except Exception as e:
-                    st.error(f"CSV取得・解析中にエラーが発生しました: {e}") 
+                    st.error(f"CSV取得・解析中にエラーが発生しました: {e}")
