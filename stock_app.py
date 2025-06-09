@@ -8,18 +8,18 @@ import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-# .env から環境変数を読み込み
+# .env から環境変数読み込み
 load_dotenv()
 API_KEY = os.environ.get("EDINET_API_KEY")
 
-st.title("\U0001F4CA 企業名からEDINET財務データを自動取得・可視化")
+st.title("📊 企業名からEDINET財務データを自動取得・可視化")
 
 if not API_KEY:
     st.error("APIキーが設定されていません。`.env` ファイルまたは環境変数 'EDINET_API_KEY' を確認してください。")
     st.stop()
 
 # ----------------------------
-# docID検索
+# docIDを企業名で検索
 # ----------------------------
 def search_docid_by_company_name(company_name, days_back=180):
     date = datetime.today()
@@ -37,17 +37,17 @@ def search_docid_by_company_name(company_name, days_back=180):
                 name = doc.get("filerName", "")
                 if company_name in name:
                     return doc.get("docID"), name, doc.get("docDescription")
-        except Exception as e:
+        except Exception:
             continue
     return None, None, None
 
 # ----------------------------
-# ZIP内CSV取得
+# docIDからCSVを取得・読込
 # ----------------------------
 def fetch_csv_from_docid(doc_id):
     url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}"
     headers = {"Ocp-Apim-Subscription-Key": API_KEY}
-    params = {"type": 5}  # CSV取得用
+    params = {"type": 5}  # CSV取得
     res = requests.get(url, headers=headers, params=params, timeout=20)
     if "zip" not in res.headers.get("Content-Type", ""):
         raise ValueError("このdocIDにはZIPファイルが存在しません")
@@ -61,7 +61,7 @@ def fetch_csv_from_docid(doc_id):
     raise FileNotFoundError("CSVファイルがZIP内に見つかりませんでした")
 
 # ----------------------------
-# 財務指標抽出
+# 財務指標を抽出
 # ----------------------------
 def extract_financial_metrics(df):
     if not set(["項目ID", "金額"]).issubset(df.columns):
@@ -79,7 +79,7 @@ def extract_financial_metrics(df):
 # ----------------------------
 # Streamlit UI
 # ----------------------------
-st.header("\U0001F50D 企業名からdocIDを検索し財務CSVを可視化")
+st.header("🔍 企業名からdocIDを検索し、財務CSVを可視化")
 company = st.text_input("企業名を入力（例: トヨタ自動車株式会社）")
 
 if st.button("検索して財務データ表示"):
@@ -94,11 +94,19 @@ if st.button("検索して財務データ表示"):
                 st.success(f"✅ 見つかりました：{name}｜{desc}｜docID: {doc_id}")
                 try:
                     df, fname = fetch_csv_from_docid(doc_id)
-                    st.write(f"\U0001F4C1 ファイル名: {fname}")
+                    st.write(f"📂 ファイル名: {fname}")
                     st.dataframe(df.head(30))
+
+                    # 財務指標の抽出と表示
                     metrics = extract_financial_metrics(df)
-                    st.subheader("\U0001F4C8 抽出された財務指標")
-                    for k, v in metrics.items():
-                        st.metric(label=k, value=v)
+                    if "エラー" in metrics:
+                        st.error(metrics["エラー"])
+                    else:
+                        st.subheader("📈 抽出された財務指標")
+                        rows = []
+                        for k, v in metrics.items():
+                            rows.append({"指標": k, "金額": v})
+                        result_df = pd.DataFrame(rows)
+                        st.table(result_df)
                 except Exception as e:
                     st.error(f"CSV取得・解析中にエラーが発生しました: {e}")
