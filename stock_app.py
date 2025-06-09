@@ -21,12 +21,14 @@ if not API_KEY:
 # ----------------------------
 # docIDを企業名で検索
 # ----------------------------
-def search_docid_by_company_name(company_name, days_back=365):
+def search_quarterly_docid(company_name, days_back=180):
     date = datetime.today()
     headers = {"Ocp-Apim-Subscription-Key": API_KEY}
+    found_docs = []
+    
     for _ in range(days_back):
         date -= timedelta(days=1)
-        if date.weekday() >= 5:  # 土日スキップ
+        if date.weekday() >= 5:
             continue
         url = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
         params = {"date": date.strftime('%Y-%m-%d'), "type": 2}
@@ -35,15 +37,20 @@ def search_docid_by_company_name(company_name, days_back=365):
             res.raise_for_status()
             for doc in res.json().get("results", []):
                 name = doc.get("filerName", "")
-                description = doc.get("docDescription", "")
-                doc_type_code = doc.get("docTypeCode", "")
-
-                # ✅ 条件: 企業名が一致し、docTypeCode が「140（四半期報告書）」のみに限定
-                if company_name in name and doc_type_code == "140":
-                    return doc.get("docID"), name, description
+                desc = doc.get("docDescription", "")
+                doc_type = doc.get("docTypeCode", "")
+                if company_name in name and doc_type == "140":
+                    found_docs.append((doc.get("docID"), name, desc, date.strftime('%Y-%m-%d')))
         except Exception:
             continue
+
+    if found_docs:
+        # 最新日付のものを返す
+        found_docs.sort(key=lambda x: x[3], reverse=True)
+        return found_docs[0][0], found_docs[0][1], found_docs[0][2]
+    
     return None, None, None
+
 
 # ----------------------------
 # docIDからCSVを取得・読込
