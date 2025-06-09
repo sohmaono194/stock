@@ -21,7 +21,7 @@ if not API_KEY:
 # ----------------------------
 # docIDを企業名で検索
 # ----------------------------
-def search_docid_by_company_name(company_name, days_back=180):
+def search_docid_by_company_name(company_name, days_back=365):
     date = datetime.today()
     headers = {"Ocp-Apim-Subscription-Key": API_KEY}
     for _ in range(days_back):
