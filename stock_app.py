@@ -35,8 +35,12 @@ def search_docid_by_company_name(company_name, days_back=180):
             res.raise_for_status()
             for doc in res.json().get("results", []):
                 name = doc.get("filerName", "")
-                if company_name in name:
-                    return doc.get("docID"), name, doc.get("docDescription")
+                description = doc.get("docDescription", "")
+                doc_type_code = doc.get("docTypeCode", "")
+
+                # ✅ 条件: 企業名が一致し、docTypeCode が「140（四半期報告書）」のみに限定
+                if company_name in name and doc_type_code == "140":
+                    return doc.get("docID"), name, description
         except Exception:
             continue
     return None, None, None
