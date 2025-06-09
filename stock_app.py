@@ -15,39 +15,30 @@ API_KEY = os.environ.get("EDINET_API_KEY")
 st.title("📊 企業名からEDINET財務データを自動取得・可視化")
 
 if not API_KEY:
-    st.error("APIキーが設定されていません。`.env` ファイルまたは環境変数 'EDINET_API_KEY' を確認してください。")
+    st.error("APIキーが設定されていません。.env ファイルまたは環境変数 'EDINET_API_KEY' を確認してください。")
     st.stop()
 
 # ----------------------------
 # docIDを企業名で検索
 # ----------------------------
-def search_quarterly_docid(company_name, days_back=90):
+def search_docid_by_company_name(company_name, days_back=180):
     date = datetime.today()
     headers = {"Ocp-Apim-Subscription-Key": API_KEY}
-
     for _ in range(days_back):
         date -= timedelta(days=1)
-        if date.weekday() >= 5:
+        if date.weekday() >= 5:  # 土日スキップ
             continue
-
         url = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
         params = {"date": date.strftime('%Y-%m-%d'), "type": 2}
         try:
             res = requests.get(url, headers=headers, params=params, timeout=10)
             res.raise_for_status()
-
             for doc in res.json().get("results", []):
                 name = doc.get("filerName", "")
-                doc_type = doc.get("docTypeCode", "")
-                desc = doc.get("docDescription", "")
-                # ✅ 柔軟な一致 + 四半期報告書（docTypeCode="140"）だけ
-                if (company_name in name or name in company_name) and doc_type == "140":
-                    return doc.get("docID"), name, desc
-
-        except Exception as e:
-            print(f"[DEBUG] {e}")
+                if company_name in name:
+                    return doc.get("docID"), name, doc.get("docDescription")
+        except Exception:
             continue
-
     return None, None, None
 
 # ----------------------------
@@ -96,7 +87,7 @@ if st.button("検索して財務データ表示"):
         st.warning("企業名を入力してください")
     else:
         with st.spinner("EDINETでdocID検索中..."):
-            doc_id, name, desc = search_quarterly_docid(company)  
+            doc_id, name, desc = search_docid_by_company_name(company)
             if not doc_id:
                 st.error("該当する企業のdocIDが見つかりませんでした（CSV対応でない可能性あり）")
             else:
@@ -118,4 +109,4 @@ if st.button("検索して財務データ表示"):
                         result_df = pd.DataFrame(rows)
                         st.table(result_df)
                 except Exception as e:
-                    st.error(f"CSV取得・解析中にエラーが発生しました: {e}")
+                    st.error(f"CSV取得・解析中にエラーが発生しました: {e}") 
