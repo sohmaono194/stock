@@ -38,7 +38,10 @@ def search_docid_by_company_name(company_name, days_back=180):
                 name = doc.get("filerName", "")
                 desc = doc.get("docDescription", "")
                 csv_flag = doc.get("csvFlag", "0")
-                if company_name in name:
+                doc_type = doc.get("docTypeCode", "")
+
+                # ✅ 財務データが含まれる四半期報告書に限定
+                if company_name in name and doc_type == "140" and csv_flag == "1":
                     return doc.get("docID"), name, desc, csv_flag
         except Exception:
             continue
