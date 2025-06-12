@@ -2,114 +2,105 @@ import streamlit as st
 import requests
 import zipfile
 import io
-import pandas as pd
 import os
+import pandas as pd
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
 
-# フォント設定（日本語対応）
-plt.rcParams['font.family'] = 'MS Gothic'  # Macの場合は 'AppleGothic'
+# 日本語フォント（Windows）
+plt.rcParams['font.family'] = 'MS Gothic'
 
-# APIキー取得（.env or 環境変数）
+# APIキー
 API_KEY = os.getenv("EDINET_API_KEY")
 HEADERS = {"Ocp-Apim-Subscription-Key": API_KEY}
 EDINET_API = "https://api.edinet-fsa.go.jp/api/v2"
 
-# Streamlitタイトル
-st.title("📊 企業名からEDINET報告書データをグラフ化")
+st.title("📊 EDINET報告書から財務指標を可視化")
 
-# ----------------------------
-# 企業名から報告書のdocIDを探す
-# ----------------------------
-def find_docid(company_name, days_back=365):
+# docIDを検索
+def find_latest_docid(company_name, days_back=180):
     today = datetime.today()
     for _ in range(days_back):
         today -= timedelta(days=1)
         if today.weekday() >= 5:
-            continue  # 土日スキップ
-        params = {"date": today.strftime("%Y-%m-%d"), "type": 2}
+            continue
         try:
-            res = requests.get(f"{EDINET_API}/documents.json", headers=HEADERS, params=params, timeout=10)
-            res.raise_for_status()
-            for it in res.json().get("results", []):
-                if company_name in it.get("filerName", "") and "報告書" in it.get("docDescription", ""):
-                    return it["docID"], it["docDescription"]
+            res = requests.get(
+                f"{EDINET_API}/documents.json",
+                headers=HEADERS,
+                params={"date": today.strftime('%Y-%m-%d'), "type": 2},
+                timeout=10
+            )
+            for doc in res.json().get("results", []):
+                if company_name in doc.get("filerName", "") and "報告書" in doc.get("docDescription", ""):
+                    return doc.get("docID"), doc.get("docDescription")
         except:
             continue
     return None, None
 
-# ----------------------------
-# 財務指標抽出：XBRLから
-# ----------------------------
-def extract_from_xbrl(xml_data):
+# XBRL抽出
+def extract_xbrl_metrics(xml_data):
     soup = BeautifulSoup(xml_data, "xml")
-    tags = {
+    tag_map = {
         "売上高": ["NetSales", "NetSalesConsolidated"],
         "営業利益": ["OperatingIncome", "OperatingIncomeConsolidated"],
         "経常利益": ["OrdinaryIncome", "OrdinaryIncomeConsolidated"],
         "純利益": ["NetIncome", "Profit", "NetIncomeAttributableToOwnersOfParent"]
     }
     result = {}
-    for key, options in tags.items():
-        for tag in options:
+    for label, tags in tag_map.items():
+        for tag in tags:
             el = soup.find(tag)
             if el and el.text.strip().isdigit():
-                result[key] = int(el.text.strip())
+                result[label] = int(el.text.strip())
                 break
-        if key not in result:
-            result[key] = None
+        if label not in result:
+            result[label] = None
     return result
 
-# ----------------------------
-# docIDからZIPファイルを取得し、XBRLパース
-# ----------------------------
-def fetch_and_parse(doc_id):
-    url = f"{EDINET_API}/documents/{doc_id}"
-    try:
-        res = requests.get(url, headers=HEADERS, params={"type": 1}, timeout=15)
-        res.raise_for_status()
-        if "zip" not in res.headers.get("Content-Type", ""):
-            raise ValueError("ZIPファイルが取得できませんでした。")
+# ZIPからXBRLを解凍＆取得
+def fetch_xbrl_from_zip(doc_id):
+    res = requests.get(
+        f"{EDINET_API}/documents/{doc_id}",
+        headers=HEADERS,
+        params={"type": 1},
+        timeout=15
+    )
+    if "zip" not in res.headers.get("Content-Type", ""):
+        raise ValueError("ZIPファイルが取得できませんでした。")
 
-        with zipfile.ZipFile(io.BytesIO(res.content)) as z:
-            for name in z.namelist():
-                if name.endswith(".xbrl") and "PublicDoc" in name:
-                    with z.open(name) as f:
-                        return extract_from_xbrl(f.read())
-    except Exception as e:
-        st.error(f"データ取得または解析に失敗しました：{e}")
-        return None
+    with zipfile.ZipFile(io.BytesIO(res.content)) as z:
+        for name in z.namelist():
+            if name.endswith(".xbrl") and "PublicDoc" in name:
+                with z.open(name) as f:
+                    return extract_xbrl_metrics(f.read())
+    raise ValueError("XBRLファイルが見つかりませんでした。")
 
-# ----------------------------
-# グラフ描画（matplotlib）
-# ----------------------------
-def plot_metrics(metrics):
+# グラフ表示
+def show_graph(metrics):
     df = pd.DataFrame(list(metrics.items()), columns=["指標", "金額"])
     plt.figure(figsize=(6, 4))
     plt.bar(df["指標"], df["金額"])
-    plt.ylabel("金額（百万円）")
     plt.title("財務指標")
+    plt.ylabel("金額（百万円）")
     st.pyplot(plt)
 
-# ----------------------------
 # UI
-# ----------------------------
-company = st.text_input("企業名を入力（例：トヨタ自動車株式会社）")
-
-if st.button("検索して表示"):
+company = st.text_input("企業名を入力してください（例：トヨタ自動車株式会社）")
+if st.button("報告書を検索して可視化"):
     if not company:
         st.warning("企業名を入力してください。")
     else:
         with st.spinner("docIDを検索中..."):
-            doc_id, desc = find_docid(company)
+            doc_id, desc = find_latest_docid(company)
             if not doc_id:
-                st.error("該当する報告書が見つかりませんでした。")
+                st.error("報告書が見つかりませんでした。")
             else:
                 st.success(f"✅ 見つかりました：{desc}｜docID: {doc_id}")
-                metrics = fetch_and_parse(doc_id)
-                if metrics:
-                    st.subheader("📈 財務指標")
+                try:
+                    metrics = fetch_xbrl_from_zip(doc_id)
                     st.write(metrics)
-                    plot_metrics(metrics)
+                    show_graph(metrics)
+                except Exception as e:
+                    st.error(f"データ取得に失敗しました：{e}")
