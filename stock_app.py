@@ -54,3 +54,51 @@ def save_csv(docID, type=5):
             z.extractall(f"{docID}")
 
         os.remove(temp_zip)
+docID_dict = {
+    "商船三井": "S100STH6",
+    "日本郵船": "S100SS7P",
+    "玉井商船株式会社": "S100STLS",
+    "川崎汽船": "S100SRTI",
+    "飯野海運": "S100SP9O",
+}
+
+for docID in docID_dict.values():
+    save_csv(docID, type=5)
+dfs = []
+
+for companyName, docID in docID_dict.items():
+    csv_savedir = os.path.join(docID, "XBRL_TO_CSV")
+    filelist = [f for f in os.listdir(csv_savedir) if f.startswith("jpcrp")]
+    if len(filelist) > 0:
+        df = pd.read_csv(
+            os.path.join(csv_savedir, filelist[0]), encoding="utf-16", sep="\t"
+        )
+        df["会社名"] = [companyName for _ in range(df.shape[0])]
+        dfs.append(df)
+
+all_data = pd.concat(dfs)
+all_data.head()
+print(
+    all_data.query(f"要素ID=='jpcrp_cor:NotesRegardingDividendTextBlock'")[["会社名", "値"]]
+)
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+def compare_company_IR(data, contextId, elementId, elementJpName):
+    plot_data = data.query(f"要素ID=='{elementId}' and コンテキストID=='{contextId}'").copy()
+    plot_data[elementJpName] = pd.to_numeric(plot_data["値"])
+    sns.barplot(data=plot_data, x="会社名", y=elementJpName)
+    plt.ylabel(elementJpName)
+    plt.show()
+
+
+compare_company_IR(
+    all_data,
+    "CurrentQuarterDuration",
+    "jpcrp_cor:BasicEarningsLossPerShareSummaryOfBusinessResults",
+    "EPS",
+)
+
+compare_company_IR(all_data, "CurrentYTDDuration", "jppfs_cor:GrossProfit", "粗利益")
