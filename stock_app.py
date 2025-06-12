@@ -8,6 +8,9 @@ import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
+import matplotlib.pyplot as plt
+import seaborn as sns
+import japanize_matplotlib
 
 # .env からAPIキー取得
 load_dotenv()
@@ -19,20 +22,22 @@ if not API_KEY:
     st.error("APIキーが設定されていません。`.env` ファイルまたは環境変数 'EDINET_API_KEY' を確認してください。")
     st.stop()
 
+API_ENDPOINT = "https://disclosure.edinet-fsa.go.jp/api/v2"
+HEADERS = {"Ocp-Apim-Subscription-Key": API_KEY}
+
 # ----------------------------
-# docIDを企業名で検索（csvFlag=1優先）
+# docIDを企業名で検索（四半期報告書に限定）
 # ----------------------------
 def search_docid_by_company_name(company_name, days_back=180):
     date = datetime.today()
-    headers = {"Ocp-Apim-Subscription-Key": API_KEY}
     for _ in range(days_back):
         date -= timedelta(days=1)
         if date.weekday() >= 5:
             continue
-        url = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
+        url = f"{API_ENDPOINT}/documents.json"
         params = {"date": date.strftime('%Y-%m-%d'), "type": 2}
         try:
-            res = requests.get(url, headers=headers, params=params, timeout=10)
+            res = requests.get(url, headers=HEADERS, params=params, timeout=10)
             res.raise_for_status()
             for doc in res.json().get("results", []):
                 name = doc.get("filerName", "")
@@ -44,6 +49,23 @@ def search_docid_by_company_name(company_name, days_back=180):
             continue
     return None, None, None, "0"
 
+# ----------------------------
+# docIDからZIPを保存・展開
+# ----------------------------
+def save_csv(docID, type=5):
+    st.info(f"{docID} のCSVデータを取得中")
+    params = {"type": type}
+    r = requests.get(f"{API_ENDPOINT}/documents/{docID}", headers=HEADERS, params=params)
+    if r.status_code != 200:
+        st.warning("取得失敗")
+        return
+    os.makedirs(docID, exist_ok=True)
+    temp_zip = f"{docID}.zip"
+    with open(temp_zip, "wb") as f:
+        f.write(r.content)
+    with zipfile.ZipFile(temp_zip) as z:
+        z.extractall(docID)
+    os.remove(temp_zip)
 
 # ----------------------------
 # CSVから財務指標抽出
@@ -67,14 +89,12 @@ def extract_financial_metrics(df):
 def extract_metrics_from_xbrl(xml_content):
     soup = BeautifulSoup(xml_content, "xml")
     results = {}
-
     tag_map = {
         "NetSales": ["NetSales", "NetSalesConsolidated", "NetSalesOfReportingSegment"],
         "OperatingIncome": ["OperatingIncome", "OperatingIncomeConsolidated"],
         "OrdinaryIncome": ["OrdinaryIncome", "OrdinaryIncomeConsolidated"],
         "NetIncome": ["NetIncome", "Profit", "NetIncomeAttributableToOwnersOfParent"],
     }
-
     for label, tags in tag_map.items():
         for tag in tags:
             found = soup.find(tag)
@@ -83,38 +103,30 @@ def extract_metrics_from_xbrl(xml_content):
                 break
         if label not in results:
             results[label] = "N/A"
-
     return results
 
 # ----------------------------
 # docIDからCSVまたはXBRLを取得して抽出
 # ----------------------------
 def fetch_data_by_docid(doc_id, use_csv=True):
-    headers = {"Ocp-Apim-Subscription-Key": API_KEY}
-    url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}"
-
+    url = f"{API_ENDPOINT}/documents/{doc_id}"
     if use_csv:
         try:
-            res = requests.get(url, headers=headers, params={"type": 5}, timeout=15)
+            res = requests.get(url, headers=HEADERS, params={"type": 5}, timeout=15)
             if "zip" in res.headers.get("Content-Type", ""):
                 with zipfile.ZipFile(io.BytesIO(res.content)) as z:
-                    st.write("ZIP内ファイル一覧:", z.namelist())  # デバッグ表示
+                    st.write("ZIP内ファイル一覧:", z.namelist())
                     for file_name in z.namelist():
                         if file_name.endswith(".csv"):
                             with z.open(file_name) as f:
                                 raw = f.read()
                                 encoding = chardet.detect(raw)["encoding"] or "utf-8"
-                                try:
-                                    df = pd.read_csv(io.BytesIO(raw), encoding=encoding)
-                                except Exception:
-                                    df = pd.read_csv(io.BytesIO(raw), encoding="utf-8", errors="replace")
+                                df = pd.read_csv(io.BytesIO(raw), encoding=encoding)
                                 return extract_financial_metrics(df), "CSV"
         except Exception as e:
             st.warning(f"[CSV取得失敗] {e}")
-
-    # XBRLで再取得
     try:
-        res = requests.get(url, headers=headers, params={"type": 1}, timeout=20)
+        res = requests.get(url, headers=HEADERS, params={"type": 1}, timeout=20)
         if "zip" in res.headers.get("Content-Type", ""):
             with zipfile.ZipFile(io.BytesIO(res.content)) as z:
                 for file_name in z.namelist():
@@ -124,8 +136,21 @@ def fetch_data_by_docid(doc_id, use_csv=True):
                             return extract_metrics_from_xbrl(xml_data), "XBRL"
     except Exception as e:
         st.warning(f"[XBRL取得失敗] {e}")
-
     raise ValueError("CSV・XBRLともに取得できませんでした。")
+
+# ----------------------------
+# 比較用グラフ描画関数
+# ----------------------------
+def compare_company_IR(data, contextId, elementId, elementJpName):
+    plot_data = data.query(f"要素ID == '{elementId}' and コンテキストID == '{contextId}'").copy()
+    plot_data[elementJpName] = pd.to_numeric(plot_data["値"], errors="coerce")
+    sns.barplot(data=plot_data, x="会社名", y=elementJpName)
+    plt.title(elementJpName)
+    plt.ylabel(elementJpName)
+    plt.xticks(rotation=30)
+    plt.tight_layout()
+    st.pyplot(plt)
+    plt.clf()
 
 # ----------------------------
 # Streamlit UI
@@ -153,3 +178,42 @@ if st.button("検索して財務データ表示"):
                         st.table(result_df)
                 except Exception as e:
                     st.error(f"データ取得に失敗しました: {e}")
+
+# ----------------------------
+# 複数企業の比較：EPSや粗利益
+# ----------------------------
+docID_dict = {
+    "商船三井": "S100STH6",
+    "日本郵船": "S100SS7P",
+    "玉井商船株式会社": "S100STLS",
+    "川崎汽船": "S100SRTI",
+    "飯野海運": "S100SP9O",
+}
+
+all_data = pd.DataFrame()
+for company, docID in docID_dict.items():
+    save_csv(docID, type=5)
+    folder = f"{docID}/XBRL/PublicDoc"
+    if not os.path.exists(folder):
+        continue
+    for file in os.listdir(folder):
+        if file.endswith(".csv"):
+            df = pd.read_csv(os.path.join(folder, file), encoding="utf-8", low_memory=False)
+            df["会社名"] = company
+            all_data = pd.concat([all_data, df], ignore_index=True)
+
+st.subheader("📊 EPS比較")
+compare_company_IR(
+    all_data,
+    "CurrentQuarterDuration",
+    "jpcrp_cor:BasicEarningsLossPerShareSummaryOfBusinessResults",
+    "EPS"
+)
+
+st.subheader("📊 粗利益比較")
+compare_company_IR(
+    all_data,
+    "CurrentYTDDuration",
+    "jppfs_cor:GrossProfit",
+    "粗利益"
+)
