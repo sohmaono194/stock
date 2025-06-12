@@ -23,15 +23,24 @@ def find_docid(company, days=365):
     today = datetime.today()
     for i in range(days):
         d = today - timedelta(days=i)
-        if d.weekday() >=5: continue
-        res = requests.get(f"{API_URL}/documents.json",
-                           params={"date": d.strftime("%Y-%m-%d"), "type":2},
-                           headers=headers, timeout=10)
-        if res.status_code != 200: continue
-        for it in res.json().get("results", []):
-            if company in it.get("filerName","") and "四半期報告書" in it.get("docDescription",""):
-                return it["docID"], it["docDescription"]
+        if d.weekday() >= 5:
+            continue
+        try:
+            res = requests.get(f"{API_URL}/documents.json",
+                               params={"date": d.strftime("%Y-%m-%d"), "type":2},
+                               headers=headers, timeout=10)
+            if res.status_code != 200:
+                continue
+
+            for it in res.json().get("results", []):
+                name = it.get("filerName")
+                desc = it.get("docDescription")
+                if name and desc and company in name and "四半期報告書" in desc:
+                    return it["docID"], desc
+        except Exception:
+            continue
     return None, None
+
 
 # ZIP取得＆展開
 def download_zip(doc_id, doc_type=5):
