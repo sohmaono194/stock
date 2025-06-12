@@ -40,10 +40,14 @@ def find_docid(company_name, days_back=120):
         )
         if res.status_code != 200:
             continue
+
         for item in res.json().get("results", []):
-            if "四半期報告書" in item.get("docDescription", "") and company_name in item.get("filerName", ""):
-                return item["docID"], item["docDescription"]
+            desc = item.get("docDescription")
+            name = item.get("filerName")
+            if desc and name and "四半期報告書" in desc and company_name in name:
+                return item["docID"], desc
     return None, None
+
 
 # -------------------------
 # ZIPからCSVを抽出してデータフレームに
