@@ -97,12 +97,16 @@ def fetch_data_by_docid(doc_id, use_csv=True):
             res = requests.get(url, headers=headers, params={"type": 5}, timeout=15)
             if "zip" in res.headers.get("Content-Type", ""):
                 with zipfile.ZipFile(io.BytesIO(res.content)) as z:
+                    st.write("ZIP内ファイル一覧:", z.namelist())  # デバッグ表示
                     for file_name in z.namelist():
                         if file_name.endswith(".csv"):
                             with z.open(file_name) as f:
                                 raw = f.read()
-                                encoding = chardet.detect(raw)["encoding"]
-                                df = pd.read_csv(io.BytesIO(raw), encoding=encoding)
+                                encoding = chardet.detect(raw)["encoding"] or "utf-8"
+                                try:
+                                    df = pd.read_csv(io.BytesIO(raw), encoding=encoding)
+                                except Exception:
+                                    df = pd.read_csv(io.BytesIO(raw), encoding="utf-8", errors="replace")
                                 return extract_financial_metrics(df), "CSV"
         except Exception as e:
             st.warning(f"[CSV取得失敗] {e}")
@@ -140,8 +144,11 @@ if st.button("検索して財務データ表示"):
                 st.success(f"見つかりました：{name}｜{desc}｜docID: {doc_id}｜CSV: {csv_flag}")
                 try:
                     metrics, source = fetch_data_by_docid(doc_id, use_csv=(csv_flag == "1"))
-                    st.subheader(f"抽出された財務指標（{source}から取得）")
-                    result_df = pd.DataFrame([{"指標": k, "金額": v} for k, v in metrics.items()])
-                    st.table(result_df)
+                    if all(v == "N/A" or v == "" for v in metrics.values()):
+                        st.warning("書類に財務データが含まれていない可能性があります。")
+                    else:
+                        st.subheader(f"抽出された財務指標（{source}から取得）")
+                        result_df = pd.DataFrame([{"指標": k, "金額": v} for k, v in metrics.items()])
+                        st.table(result_df)
                 except Exception as e:
                     st.error(f"データ取得に失敗しました: {e}")
