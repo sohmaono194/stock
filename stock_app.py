@@ -1,104 +1,66 @@
 import os
 import time
 import zipfile
-import io
-
-import streamlit as st
-import pandas as pd
 import requests
-import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
-from dotenv import load_dotenv
-from datetime import datetime, timedelta
+import pandas as pd
 import chardet
 
-API_ENDPOINT = "https://disclosure.edinet-fsa.go.jp/api/v2"  # v2を使用する
+API_ENDPOINT = "https://disclosure.edinet-fsa.go.jp/api/v2"
 
+def fetch_and_extract_csv(docID, doc_type=5):
+    headers = {"Ocp-Apim-Subscription-Key": os.environ.get("EDINET_API_KEY")}
+    url = f"{API_ENDPOINT}/documents/{docID}?type={doc_type}"
+    
+    try:
+        res = requests.get(url, headers=headers, timeout=15)
+        res.raise_for_status()
+    except Exception as e:
+        print(f"[ERROR] 書類取得に失敗: {e}")
+        return None
 
-def save_csv(docID, type=5):
-    """EDINETからデータを取得してフォルダに保存する
+    # 一時ZIP保存
+    temp_zip_path = f"{docID}.zip"
+    with open(temp_zip_path, "wb") as f:
+        f.write(res.content)
 
-    Args:
-        docID (str): DocID
-    """
-    assert type in [1, 2, 3, 4, 5], "typeの指定が間違っている"
-    if type == 1:
-        print(f"{docID}のXBRLデータを取得中")
-    elif type == 2:
-        print(f"{docID}のpdfデータを取得中")
-    elif type in {3, 4}:
-        print(f"{docID}のデータを取得中")
-    elif type == 5:
-        print(f"{docID}のcsvデータを取得中")
-        time.sleep(5)
+    # ZIP解凍とCSV読み込み
+    try:
+        with zipfile.ZipFile(temp_zip_path, "r") as z:
+            for file_name in z.namelist():
+                if file_name.endswith(".csv"):
+                    with z.open(file_name) as f:
+                        raw = f.read()
+                        encoding = chardet.detect(raw)['encoding']
+                        df = pd.read_csv(pd.io.common.BytesIO(raw), encoding=encoding)
+                        return df
+    except zipfile.BadZipFile:
+        print("[ERROR] ZIPファイルが壊れています")
+    finally:
+        os.remove(temp_zip_path)
 
-    r = requests.get(
-        f"{API_ENDPOINT}/documents/{docID}",
-        {
-            "type": type,
-            "Subscription-Key": os.environ.get("EDINET_API_KEY"),
-        },
-    )
+    print("[WARNING] CSVファイルが見つかりませんでした")
+    return None
 
-    if r is None:
-        print("データの取得に失敗しました。csvFlag==1かどうか確認してください。")
-    else:
-        os.makedirs(f"{docID}", exist_ok=True)
-        temp_zip = "uuid_89FD71B5_CD7B_4833-B30D‗5AA5006097E2.zip"
+def extract_financial_metrics(df):
+    if not set(["項目ID", "金額"]).issubset(df.columns):
+        return {"エラー": "必要な列（項目ID、金額）が存在しません"}
 
-        with open(temp_zip, "wb") as f:
-            for chunk in r.iter_content(chunk_size=1024):
-                f.write(chunk)
+    # 英語のタグ名で検索（jpcrp_cor:〜 や NetSales など）
+    keywords = {
+        "売上高": ["NetSales", "SalesRevenue", "Revenue"],
+        "営業利益": ["OperatingIncome"],
+        "経常利益": ["OrdinaryIncome"],
+        "純利益": ["NetIncome", "ProfitAttributableToOwnersOfParent"]
+    }
 
-        with zipfile.ZipFile(temp_zip) as z:
-            z.extractall(f"{docID}")
+    result = {}
+    for label, tag_list in keywords.items():
+        for tag in tag_list:
+            row = df[df["項目ID"].str.contains(tag, na=False)]
+            if not row.empty:
+                result[label] = row.iloc[0]["金額"]
+                break
+        else:
+            result[label] = "N/A"
 
-        os.remove(temp_zip)
-docID_dict = {
-    "商船三井": "S100STH6",
-    "日本郵船": "S100SS7P",
-    "玉井商船株式会社": "S100STLS",
-    "川崎汽船": "S100SRTI",
-    "飯野海運": "S100SP9O",
-}
-
-for docID in docID_dict.values():
-    save_csv(docID, type=5)
-dfs = []
-
-for companyName, docID in docID_dict.items():
-    csv_savedir = os.path.join(docID, "XBRL_TO_CSV")
-    filelist = [f for f in os.listdir(csv_savedir) if f.startswith("jpcrp")]
-    if len(filelist) > 0:
-        df = pd.read_csv(
-            os.path.join(csv_savedir, filelist[0]), encoding="utf-16", sep="\t"
-        )
-        df["会社名"] = [companyName for _ in range(df.shape[0])]
-        dfs.append(df)
-
-all_data = pd.concat(dfs)
-all_data.head()
-print(
-    all_data.query(f"要素ID=='jpcrp_cor:NotesRegardingDividendTextBlock'")[["会社名", "値"]]
-)
-
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-
-def compare_company_IR(data, contextId, elementId, elementJpName):
-    plot_data = data.query(f"要素ID=='{elementId}' and コンテキストID=='{contextId}'").copy()
-    plot_data[elementJpName] = pd.to_numeric(plot_data["値"])
-    sns.barplot(data=plot_data, x="会社名", y=elementJpName)
-    plt.ylabel(elementJpName)
-    plt.show()
-
-
-compare_company_IR(
-    all_data,
-    "CurrentQuarterDuration",
-    "jpcrp_cor:BasicEarningsLossPerShareSummaryOfBusinessResults",
-    "EPS",
-)
-
-compare_company_IR(all_data, "CurrentYTDDuration", "jppfs_cor:GrossProfit", "粗利益")
+    return result
