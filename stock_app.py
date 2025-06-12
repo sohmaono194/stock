@@ -140,7 +140,7 @@ if st.button("検索して財務データ表示"):
                 st.success(f"見つかりました：{name}｜{desc}｜docID: {doc_id}｜CSV: {csv_flag}")
                 try:
                     metrics, source = fetch_data_by_docid(doc_id, use_csv=(csv_flag == "1"))
-                    st.subheader(f"\ud83d\udcc8 抽出された財務指標（{source}から取得）")
+                    st.subheader(f"抽出された財務指標（{source}から取得）")
                     result_df = pd.DataFrame([{"指標": k, "金額": v} for k, v in metrics.items()])
                     st.table(result_df)
                 except Exception as e:
