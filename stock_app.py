@@ -32,6 +32,8 @@ if not API_KEY:
 def find_docid(company_name, days_back=90):
     today = datetime.today()
     headers = {"Ocp-Apim-Subscription-Key": API_KEY}
+    target_keywords = ["有価証券報告書", "四半期報告書", "半期報告書"]
+
     for i in range(days_back):
         date_str = (today - timedelta(days=i)).strftime("%Y-%m-%d")
         params = {"date": date_str, "type": 2}
@@ -40,11 +42,14 @@ def find_docid(company_name, days_back=90):
             res.raise_for_status()
             results = res.json().get("results", [])
             for item in results:
-                if company_name in item.get("filerName", "") and "報告書" in item.get("docDescription", ""):
-                    return item.get("docID"), item.get("docDescription", "")
+                desc = item.get("docDescription", "")
+                name = item.get("filerName", "")
+                if company_name in name and any(k in desc for k in target_keywords):
+                    return item.get("docID"), desc
         except:
             continue
     return None, None
+
 
 # -----------------------------
 # ZIPダウンロード＋解凍処理
