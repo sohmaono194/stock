@@ -45,8 +45,11 @@ def find_docid(company_name, days_back=120):
             desc = item.get("docDescription")
             name = item.get("filerName")
             if desc and name and "四半期報告書" in desc and company_name in name:
-                return item["docID"], desc
-    return None, None
+              return item["docID"], desc
+            elif desc and name and "四半期報告書" in desc and company_name in name.replace("株式会社", ""):
+              return item["docID"], desc
+            elif desc and name and "四半期報告書" in desc and company_name.replace("株式会社", "") in name:
+              return item["docID"], desc
 
 
 # -------------------------
