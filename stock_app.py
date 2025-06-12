@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 load_dotenv()
 API_KEY = os.environ.get("EDINET_API_KEY")
 
-st.title("📊 企業名からEDINET財務データを自動取得・可視化")
+st.title("\ud83d\udcca 企業名からEDINET財務データを自動取得・可視化")
 
 if not API_KEY:
     st.error("APIキーが設定されていません。`.env` ファイルまたは環境変数 'EDINET_API_KEY' を確認してください。")
@@ -43,13 +43,14 @@ def search_docid_by_company_name(company_name, days_back=180):
         except Exception:
             continue
     return None, None, None, "0"
+
 # ----------------------------
 # CSVから財務指標抽出
 # ----------------------------
 def extract_financial_metrics(df):
     if not set(["項目ID", "金額"]).issubset(df.columns):
         return {"エラー": "CSVフォーマットが不明です（必要な列が存在しません）"}
-    
+
     keywords = ["NetSales", "OperatingIncome", "OrdinaryIncome", "NetIncome"]
     extracted = {}
     for kw in keywords:
@@ -124,7 +125,7 @@ def fetch_data_by_docid(doc_id, use_csv=True):
 # ----------------------------
 # Streamlit UI
 # ----------------------------
-st.header("🔍 企業名からEDINET財務データ検索")
+st.header("\ud83d\udd0d 企業名からEDINET財務データ検索")
 company = st.text_input("企業名を入力（例: トヨタ自動車株式会社）")
 
 if st.button("検索して財務データ表示"):
@@ -136,10 +137,10 @@ if st.button("検索して財務データ表示"):
             if not doc_id:
                 st.error("docIDが見つかりませんでした（対象書類がない可能性）")
             else:
-                st.success(f"✅ 見つかりました：{name}｜{desc}｜docID: {doc_id}｜CSV: {csv_flag}")
+                st.success(f"\u2705 見つかりました：{name}｜{desc}｜docID: {doc_id}｜CSV: {csv_flag}")
                 try:
                     metrics, source = fetch_data_by_docid(doc_id, use_csv=(csv_flag == "1"))
-                    st.subheader(f"📈 抽出された財務指標（{source}から取得）")
+                    st.subheader(f"\ud83d\udcc8 抽出された財務指標（{source}から取得）")
                     result_df = pd.DataFrame([{"指標": k, "金額": v} for k, v in metrics.items()])
                     st.table(result_df)
                 except Exception as e:
