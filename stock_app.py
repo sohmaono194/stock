@@ -43,11 +43,12 @@ def find_docid(company_name, days=90):
             for item in res.json().get("results", []):
                 name = item.get("filerName")
                 desc = item.get("docDescription")
-                if name and desc and company_name in name and "四半期報告書" in desc:
+                if name and desc and company_name in name and "報告書" in desc:
                     return item["docID"], desc
         except Exception:
             continue
     return None, None
+
 
 # ZIPファイルダウンロード・解凍
 def download_and_extract_zip(doc_id, doc_type=5):
