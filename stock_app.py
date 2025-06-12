@@ -38,11 +38,12 @@ def search_docid_by_company_name(company_name, days_back=180):
                 name = doc.get("filerName", "")
                 desc = doc.get("docDescription", "")
                 csv_flag = doc.get("csvFlag", "0")
-                if company_name in name:
+                if company_name in name and "四半期報告書" in desc:
                     return doc.get("docID"), name, desc, csv_flag
         except Exception:
             continue
     return None, None, None, "0"
+
 
 # ----------------------------
 # CSVから財務指標抽出
