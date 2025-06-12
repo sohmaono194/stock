@@ -23,8 +23,8 @@ if not API_KEY:
 
 # -------------------------
 # docID検索（四半期報告書に限定）
-# -------------------------
-def find_docid(company_name, days_back=120):
+# ------------------------
+def find_docid(company_name, days_back=180):
     headers = {"Ocp-Apim-Subscription-Key": API_KEY}
     today = datetime.today()
 
@@ -32,25 +32,26 @@ def find_docid(company_name, days_back=120):
         date = today - timedelta(days=i)
         if date.weekday() >= 5:
             continue
-        res = requests.get(
-            f"{API_URL}/documents.json",
-            params={"date": date.strftime("%Y-%m-%d"), "type": 2},
-            headers=headers,
-            timeout=10,
-        )
-        if res.status_code != 200:
+        try:
+            res = requests.get(
+                f"{API_URL}/documents.json",
+                params={"date": date.strftime("%Y-%m-%d"), "type": 2},
+                headers=headers,
+                timeout=10,
+            )
+            if res.status_code != 200:
+                continue
+
+            for item in res.json().get("results", []):
+                desc = item.get("docDescription", "")
+                name = item.get("filerName", "")
+                if desc and name and "四半期報告書" in desc and company_name in name:
+                    return item["docID"], desc
+        except Exception as e:
             continue
 
-        for item in res.json().get("results", []):
-            desc = item.get("docDescription")
-            name = item.get("filerName")
-            if desc and name and "四半期報告書" in desc and company_name in name:
-              return item["docID"], desc
-            elif desc and name and "四半期報告書" in desc and company_name in name.replace("株式会社", ""):
-              return item["docID"], desc
-            elif desc and name and "四半期報告書" in desc and company_name.replace("株式会社", "") in name:
-              return item["docID"], desc
-
+    # ⛳️ ここが抜けていた可能性が高い！
+    return None, None
 
 # -------------------------
 # ZIPからCSVを抽出してデータフレームに
