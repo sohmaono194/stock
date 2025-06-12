@@ -1,31 +1,32 @@
-import streamlit as st
-import requests
-import zipfile
-import io
-import pandas as pd
-import chardet
 import os
+import io
+import zipfile
+import requests
+import chardet
+import pandas as pd
+import streamlit as st
 from datetime import datetime, timedelta
-from dotenv import load_dotenv
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
 
-# 日本語フォント設定（Cloud向け：NotoやIPAなどが有効な可能性あり）
+# 日本語フォント（Streamlit Cloud 向け）
 plt.rcParams['font.family'] = 'Noto Sans CJK JP'
 
-# .env 読み込み
+# 環境変数から APIキー取得
 load_dotenv()
 API_KEY = os.environ.get("EDINET_API_KEY")
 API_ENDPOINT = "https://disclosure.edinet-fsa.go.jp/api/v2"
 
-st.title("📊 企業名からEDINET財務データを自動取得・グラフ化")
+st.title("📦 企業名からEDINET ZIPを取得→解凍→財務指標を可視化")
 
 if not API_KEY:
     st.error("APIキーが設定されていません。`.env` に 'EDINET_API_KEY' を追加してください。")
     st.stop()
 
+# ----------------------------
 # docID 検索（四半期報告書を優先）
+# ----------------------------
 def search_docid(company_name, days_back=180):
     date = datetime.today()
     headers = {"Ocp-Apim-Subscription-Key": API_KEY}
@@ -45,8 +46,50 @@ def search_docid(company_name, days_back=180):
             continue
     return None, None, None, "0"
 
-# CSVから指標を抽出
-def extract_from_csv(df):
+# ----------------------------
+# ZIPを取得して保存・解凍
+# ----------------------------
+def download_and_extract_zip(docID, type=5):
+    headers = {"Ocp-Apim-Subscription-Key": API_KEY}
+    url = f"{API_ENDPOINT}/documents/{docID}"
+    params = {"type": type}
+    res = requests.get(url, headers=headers, params=params, timeout=20)
+    if "zip" not in res.headers.get("Content-Type", ""):
+        raise ValueError("ZIPファイルが取得できませんでした。")
+
+    temp_dir = f"temp_{docID}"
+    os.makedirs(temp_dir, exist_ok=True)
+
+    with zipfile.ZipFile(io.BytesIO(res.content)) as z:
+        z.extractall(temp_dir)
+
+    return temp_dir
+
+# ----------------------------
+# CSVから指標抽出
+# ----------------------------
+def extract_from_csv_folder(folder_path):
+    for file in os.listdir(folder_path):
+        if file.endswith(".csv"):
+            with open(os.path.join(folder_path, file), "rb") as f:
+                raw = f.read()
+                enc = chardet.detect(raw)["encoding"]
+                df = pd.read_csv(io.BytesIO(raw), encoding=enc)
+                return extract_financials_from_df(df)
+    return {}
+
+# ----------------------------
+# XBRLから指標抽出
+# ----------------------------
+def extract_from_xbrl_folder(folder_path):
+    for file in os.listdir(folder_path):
+        if file.endswith(".xbrl"):
+            with open(os.path.join(folder_path, file), "rb") as f:
+                xml = f.read()
+                return extract_from_xbrl(xml)
+    return {}
+
+def extract_financials_from_df(df):
     if not set(["項目ID", "金額"]).issubset(df.columns):
         return {}
     keywords = {
@@ -62,7 +105,6 @@ def extract_from_csv(df):
             results[jp] = int(match.iloc[0]["金額"])
     return results
 
-# XBRLから指標を抽出
 def extract_from_xbrl(xml):
     soup = BeautifulSoup(xml, "xml")
     tags = {
@@ -82,40 +124,9 @@ def extract_from_xbrl(xml):
             result[label] = None
     return result
 
-# docIDからデータ取得
-def fetch_metrics(doc_id, use_csv=True):
-    headers = {"Ocp-Apim-Subscription-Key": API_KEY}
-    url = f"{API_ENDPOINT}/documents/{doc_id}"
-
-    if use_csv:
-        try:
-            res = requests.get(url, headers=headers, params={"type": 5}, timeout=15)
-            if "zip" in res.headers.get("Content-Type", ""):
-                with zipfile.ZipFile(io.BytesIO(res.content)) as z:
-                    for name in z.namelist():
-                        if name.endswith(".csv"):
-                            raw = z.read(name)
-                            enc = chardet.detect(raw)["encoding"]
-                            df = pd.read_csv(io.BytesIO(raw), encoding=enc)
-                            return extract_from_csv(df), "CSV"
-        except Exception as e:
-            st.warning(f"[CSVエラー] {e}")
-
-    # fallback to XBRL
-    try:
-        res = requests.get(url, headers=headers, params={"type": 1}, timeout=20)
-        if "zip" in res.headers.get("Content-Type", ""):
-            with zipfile.ZipFile(io.BytesIO(res.content)) as z:
-                for name in z.namelist():
-                    if name.endswith(".xbrl"):
-                        xml = z.read(name)
-                        return extract_from_xbrl(xml), "XBRL"
-    except Exception as e:
-        st.warning(f"[XBRLエラー] {e}")
-
-    return {}, "取得失敗"
-
+# ----------------------------
 # グラフ描画
+# ----------------------------
 def plot_metrics(metrics, company_name):
     labels = list(metrics.keys())
     values = list(metrics.values())
@@ -127,24 +138,33 @@ def plot_metrics(metrics, company_name):
     plt.xticks(rotation=30)
     st.pyplot(fig)
 
-# UI
-st.header("🔍 企業名から検索")
-company = st.text_input("例: トヨタ自動車株式会社")
+# ----------------------------
+# UI 部分
+# ----------------------------
+st.header("🔍 企業名から財務データ検索・ZIP保存")
+company = st.text_input("例：トヨタ自動車株式会社")
 
-if st.button("財務データを取得・グラフ表示"):
+if st.button("ZIP取得・指標抽出・グラフ表示"):
     if not company:
-        st.warning("企業名を入力してください。")
+        st.warning("企業名を入力してください")
     else:
-        with st.spinner("EDINETからdocID検索中..."):
+        with st.spinner("docID検索中..."):
             docID, name, desc, csv_flag = search_docid(company)
         if not docID:
             st.error("docIDが見つかりませんでした。")
         else:
-            st.success(f"✅ 見つかりました：{name}｜{desc}｜docID: {docID}｜CSV対応: {csv_flag}")
-            metrics, source = fetch_metrics(docID, use_csv=(csv_flag == "1"))
+            st.success(f"✅ 見つかりました：{name}｜{desc}｜docID: {docID}｜CSV: {csv_flag}")
+            with st.spinner("ZIPファイルをダウンロード・解凍中..."):
+                folder = download_and_extract_zip(docID, type=5 if csv_flag == "1" else 1)
+
+            st.write(f"📁 解凍先： `{folder}`")
+
+            # データ抽出
+            metrics = extract_from_csv_folder(folder) if csv_flag == "1" else extract_from_xbrl_folder(folder)
+
             if not metrics:
-                st.error("財務データが見つかりませんでした。")
+                st.error("財務指標が見つかりませんでした。")
             else:
-                st.subheader(f"📊 抽出結果（{source}）")
+                st.subheader(f"📈 財務指標（{desc}）")
                 st.dataframe(pd.DataFrame(metrics.items(), columns=["指標", "金額"]))
                 plot_metrics(metrics, name)
