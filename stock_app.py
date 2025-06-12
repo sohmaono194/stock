@@ -21,6 +21,8 @@ st.title("📊 EDINET報告書から財務指標を可視化")
 # docIDを検索
 def find_latest_docid(company_name, days_back=180):
     today = datetime.today()
+    target_types = {"120", "140", "160"}  # 有報、四報、半報
+
     for _ in range(days_back):
         today -= timedelta(days=1)
         if today.weekday() >= 5:
@@ -32,12 +34,18 @@ def find_latest_docid(company_name, days_back=180):
                 params={"date": today.strftime('%Y-%m-%d'), "type": 2},
                 timeout=10
             )
-            for doc in res.json().get("results", []):
-                if company_name in doc.get("filerName", "") and "報告書" in doc.get("docDescription", ""):
+            results = res.json().get("results", [])
+            for doc in results:
+                if (
+                    doc.get("filerName", "").strip().startswith(company_name)
+                    and doc.get("docTypeCode", "") in target_types
+                    and doc.get("csvFlag") == "1"  # 任意：CSVもあるもの
+                ):
                     return doc.get("docID"), doc.get("docDescription")
         except:
             continue
     return None, None
+
 
 # XBRL抽出
 def extract_xbrl_metrics(xml_data):
