@@ -1,128 +1,132 @@
-import streamlit as st
-import requests
-import zipfile
-import io
-import pandas as pd
-import chardet
+import datetime
+import json
 import os
-from datetime import datetime, timedelta
+import urllib.parse
+import urllib.request
+from typing import List, Dict, Union
 from dotenv import load_dotenv
 
-# .env から環境変数を読み込む
-load_dotenv()
-API_KEY = os.environ.get("EDINET_API_KEY")
+# load environment variables
+dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
+if os.path.exists(dotenv_path):
+    load_dotenv(dotenv_path)
 
-st.title("📊 企業名からEDINET財務データを自動取得・可視化")
+EDINET_API_KEY = os.environ.get('EDINET_API_KEY')
 
-if not API_KEY:
-    st.error("APIキーが設定されていません。`.env` ファイルまたは環境変数 'EDINET_API_KEY' を確認してください。")
-    st.stop()
+def filter_by_codes(docs: List[Dict], edinet_codes: Union[List[str], str] = [],
+                    doc_type_codes: Union[List[str], str] = []) -> List[Dict]:
+    """Filter documents by EDINET codes and document type codes."""
+    if len(edinet_codes) == 0:
+        edinet_codes = [doc['edinetCode'] for doc in docs]
+    elif isinstance(edinet_codes, str):
+        edinet_codes = [edinet_codes]
 
-# ----------------------------
-# docIDを企業名で検索
-# ----------------------------
-def search_docid_by_company_name(company_name, days_back=180):
-    date = datetime.today()
-    headers = {"Ocp-Apim-Subscription-Key": API_KEY}
-    for _ in range(days_back):
-        date -= timedelta(days=1)
-        if date.weekday() >= 5:  # 土日をスキップ
-            continue
-        url = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
-        params = {"date": date.strftime('%Y-%m-%d'), "type": 2}
+    if len(doc_type_codes) == 0:
+        doc_type_codes = [doc['docTypeCode'] for doc in docs]
+    elif isinstance(doc_type_codes, str):
+        doc_type_codes = [doc_type_codes]
+
+    return [doc for doc in docs if doc['edinetCode'] in edinet_codes and
+            doc['docTypeCode'] in doc_type_codes]
+
+def disclosure_documents(date: Union[str, datetime.date],
+                         type: int = 2) -> Dict:
+    """Retrieve disclosure documents from EDINET API for a specified date."""
+    if isinstance(date, str):
         try:
-            res = requests.get(url, headers=headers, params=params, timeout=10)
-            res.raise_for_status()
-            for doc in res.json().get("results", []):
-                name = doc.get("filerName", "")
-                desc = doc.get("docDescription", "")
-                if company_name in name and any(kw in desc for kw in ["有価証券報告書", "四半期報告書", "半期報告書"]):
-                    return doc.get("docID"), name, desc
-        except Exception:
-            continue
-    return None, None, None
-
-# ----------------------------
-# docIDからCSVを取得
-# ----------------------------
-def fetch_csv_from_docid(doc_id):
-    url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}"
-    headers = {"Ocp-Apim-Subscription-Key": API_KEY}
-    params = {"type": 5}
-    res = requests.get(url, headers=headers, params=params, timeout=20)
-    if "zip" not in res.headers.get("Content-Type", ""):
-        raise ValueError("このdocIDにはZIPファイルが存在しません")
-
-    with zipfile.ZipFile(io.BytesIO(res.content)) as z:
-        candidates = []
-        for file_name in z.namelist():
-            if file_name.endswith(".csv"):
-                with z.open(file_name) as f:
-                    raw = f.read()
-                    encoding = chardet.detect(raw)["encoding"]
-                    try:
-                        df = pd.read_csv(io.BytesIO(raw), encoding=encoding)
-                        if "項目ID" in df.columns and "金額" in df.columns:
-                            candidates.append((df, file_name, len(df)))
-                    except Exception:
-                        continue
-        if not candidates:
-            raise FileNotFoundError("CSVファイルが見つかりませんでした")
-        # 行数が最も多いものを選ぶ
-        candidates.sort(key=lambda x: x[2], reverse=True)
-        return candidates[0][0], candidates[0][1]
-
-# ----------------------------
-# 財務指標を抽出
-# ----------------------------
-def extract_financial_metrics(df):
-    keywords = {
-        "NetSales": "売上高",
-        "OperatingIncome": "営業利益",
-        "OrdinaryIncome": "経常利益",
-        "NetIncome": "当期純利益"
-    }
-    extracted = []
-    for kw, label in keywords.items():
-        matches = df[df["項目ID"].astype(str).str.contains(kw, na=False)]
-        if not matches.empty:
-            latest = matches.iloc[0]  # 最新の行を選ぶ
-            amount = latest.get("金額", "")
-            try:
-                amount_fmt = f"{int(amount):,}"
-            except:
-                amount_fmt = amount
-            extracted.append({"指標": label, "英語ID": kw, "金額": amount_fmt})
-    return pd.DataFrame(extracted)
-
-# ----------------------------
-# UI
-# ----------------------------
-st.header("🔍 企業名からdocIDを検索し、財務CSVを取得")
-company = st.text_input("企業名を入力（例: トヨタ自動車株式会社）")
-
-if st.button("検索して財務データ表示"):
-    if not company:
-        st.warning("企業名を入力してください")
+            datetime.datetime.strptime(date, '%Y-%m-%d')
+        except ValueError:
+            raise ValueError("Invalid date string. Use format 'YYYY-MM-DD'")
+        date_str = date
+    elif isinstance(date, datetime.date):
+        date_str = date.strftime('%Y-%m-%d')
     else:
-        with st.spinner("EDINETでdocIDを検索中..."):
-            doc_id, name, desc = search_docid_by_company_name(company)
-            if not doc_id:
-                st.error("該当する企業のdocIDが見つかりませんでした（CSV対応書類でない可能性あり）")
-            else:
-                st.success(f"✅ 見つかりました：{name}｜{desc}｜docID: {doc_id}")
-                try:
-                    df, fname = fetch_csv_from_docid(doc_id)
-                    st.write(f"📂 ファイル名: {fname}")
-                    st.dataframe(df.head(30))
+        raise TypeError("Date must be a string ('YYYY-MM-DD') or datetime.date")
 
-                    st.subheader("📈 抽出された財務指標")
-                    metrics_df = extract_financial_metrics(df)
-                    if metrics_df.empty:
-                        st.warning("主要な財務指標が見つかりませんでした。")
-                    else:
-                        st.table(metrics_df)
-                        # グラフ表示
-                        st.bar_chart(metrics_df.set_index("指標")["金額"].astype(str).str.replace(",", "").astype(float))
-                except Exception as e:
-                    st.error(f"CSVの取得または解析中にエラーが発生しました: {e}")
+    url = "https://disclosure.edinet-fsa.go.jp/api/v2/documents.json"
+    params = {
+        "date": date_str,
+        "type": type, # '1' is metadata only, '2' is metadata and results
+        "Subscription-Key": EDINET_API_KEY,
+    }
+    query_string = urllib.parse.urlencode(params)
+    full_url = f"{url}?{query_string}"
+
+    with urllib.request.urlopen(full_url) as response:
+        return json.loads(response.read().decode('utf-8'))
+
+def get_document(doc_id: str) -> urllib.request.urlopen:
+    """Retrieve a specific document from EDINET API."""
+    url = f'https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}'
+    params = {
+      "type": 5,  # '5' for CSV
+      "Subscription-Key": EDINET_API_KEY,
+    }
+    query_string = urllib.parse.urlencode(params)
+    full_url = f'{url}?{query_string}'
+    return urllib.request.urlopen(full_url)
+
+def save_document(doc_res: urllib.request.urlopen, output_path: str) -> None:
+    """Save the document content to file."""
+    with open(output_path, 'wb') as file_out:
+        file_out.write(doc_res.read())
+    print(f'Saved: {output_path}')
+
+def get_documents_for_date_range(start_date: datetime.date,
+                                 end_date: datetime.date,
+                                 edinet_codes: List[str] = [],
+                                 doc_type_codes: List[str] = []) -> List[Dict]:
+    """Retrieve and filter documents for a date range."""
+    matching_docs = []
+    current_date = start_date
+    while current_date <= end_date:
+        docs_res = disclosure_documents(date=current_date)
+        if docs_res['results']:
+            filtered_docs = filter_by_codes(docs_res['results'], edinet_codes,
+                                            doc_type_codes)
+            matching_docs.extend(filtered_docs)
+        current_date += datetime.timedelta(days=1)
+    return matching_docs
+
+
+def run_demo():
+    """Demonstrate the usage of EDINET API by requesting filings
+    from date range, filtering the results, and saving reports to disk."""
+    start_date = datetime.date(2024, 2, 14)
+    end_date = datetime.date(2024, 2, 15)
+
+    doc_type_codes = ['140', '160'] # Quarterly and Semi-Annual Reports
+    megabanks = {
+        'E03614': "Sumitomo Mitsui Financial Group, Inc.",
+        'E03615': "Mizuho Financial Group, Inc.",
+        'E03606': "Mitsubishi UFJ Financial Group, Inc.",
+        'E03530': "SBI Shinsei Bank, Limited",
+    }
+
+    print(f"Requesting documents of type {doc_type_codes}, filed by:")
+    [print(f"{index}. {item}") for index, item in
+     enumerate(list(megabanks.values()), start=1)]
+    print()
+
+    docs = get_documents_for_date_range(start_date, end_date,
+                                        list(megabanks.keys()), doc_type_codes)
+
+    print(f"Found {len(docs)} matching documents. Saving results:")
+    for doc in docs:
+        doc_id = doc['docID']
+        edinet_code = doc['edinetCode']
+        doc_type_code = doc['docTypeCode']
+        filer = doc['filerName']
+        save_name = f'{edinet_code}_{filer}_{doc_type_code}_{doc_id}.zip'
+        output_path = os.path.join('.', save_name)
+        doc_res = get_document(doc_id)
+        save_document(doc_res, output_path)
+
+
+if __name__ == '__main__':
+    print("""
+        * EDINET API Demo *
+        Japanese Financial Disclosure Document Retrieval
+        日本の金融開示文書取得
+    """)
+    run_demo()
