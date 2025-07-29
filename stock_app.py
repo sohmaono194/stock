@@ -8,7 +8,8 @@ from typing import List, Dict, Union
 from dotenv import load_dotenv
 import zipfile
 import io
-import re
+import pandas as pd
+import chardet
 
 # --- 環境変数ロード ---
 load_dotenv()
@@ -19,6 +20,9 @@ if not EDINET_API_KEY:
     st.stop()
 
 # --- ヘルパー関数 ---
+def sanitize_filename(name: str) -> str:
+    return ''.join(c if c.isalnum() else '_' for c in name)
+
 def disclosure_documents(date: Union[str, datetime.date], type: int = 2) -> Dict:
     if isinstance(date, datetime.date):
         date_str = date.strftime('%Y-%m-%d')
@@ -50,11 +54,36 @@ def get_document(doc_id: str) -> bytes:
     with urllib.request.urlopen(full_url) as response:
         return response.read()
 
-def sanitize_filename(name: str) -> str:
-    return re.sub(r'[^a-zA-Z0-9._-]', '_', name)
+def extract_csv_from_zip(zip_bytes: bytes) -> pd.DataFrame:
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
+        for file_name in z.namelist():
+            if file_name.endswith('.csv'):
+                with z.open(file_name) as f:
+                    raw = f.read()
+                    encoding = chardet.detect(raw)['encoding']
+                    return pd.read_csv(io.BytesIO(raw), encoding=encoding)
+    return pd.DataFrame()
 
-# --- UI構成 ---
-st.title("📄 EDINET 開示書類 検索＆ダウンロード")
+def extract_financial_metrics(df: pd.DataFrame) -> Dict[str, Union[str, float]]:
+    if not set(["項目ID", "金額"]).issubset(df.columns):
+        return {"エラー": "CSVフォーマットが不明です（項目IDや金額列が存在しません）"}
+
+    keywords = {
+        "NetSales": "売上高",
+        "OperatingIncome": "営業利益",
+        "OrdinaryIncome": "経常利益",
+        "NetIncome": "当期純利益"
+    }
+    extracted = {}
+    for kw, label in keywords.items():
+        matches = df[df["項目ID"].astype(str).str.contains(kw, na=False)]
+        if not matches.empty:
+            val = matches.iloc[0].get("金額", "")
+            extracted[label] = val
+    return extracted
+
+# --- Streamlit UI ---
+st.title("\ud83d\udcc4 EDINET 開示書類 検索＆財務指標の可視化")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -63,9 +92,9 @@ with col2:
     end_date = st.date_input("終了日", datetime.date.today())
 
 edinet_codes_input = st.text_input("EDINETコード（カンマ区切りで複数指定可、例：E03614,E03615）")
-doc_type_codes_input = st.text_input("書類種別コード（例：140,160）")
+doc_type_codes_input = st.text_input("書類種別コード（例：120,160）")
 
-if st.button("🔍 検索実行"):
+if st.button("\ud83d\udd0d 検索実行"):
     if start_date > end_date:
         st.error("開始日は終了日より前にしてください")
         st.stop()
@@ -90,32 +119,29 @@ if st.button("🔍 検索実行"):
         st.warning("該当する書類は見つかりませんでした。")
     else:
         st.success(f"{len(results)} 件の書類が見つかりました。")
-        df_results = []
-        for r in results:
-            df_results.append({
-                "docID": r.get("docID"),
-                "企業名": r.get("filerName"),
-                "EDINETコード": r.get("edinetCode"),
-                "書類種別": r.get("docTypeCode"),
-                "提出日": r.get("submitDateTime"),
-                "説明": r.get("docDescription")
-            })
-        st.dataframe(df_results)
-
         for doc in results:
             doc_id = doc['docID']
-            filer = doc.get("filerName", "Unknown")
-            file_name = sanitize_filename(f"{doc_id}_{filer}.zip")
+            filer = sanitize_filename(doc.get("filerName", "Unknown"))
+            submit_date = doc.get("submitDateTime", "")
+            st.markdown(f"### ✍ {doc.get('filerName')} ({submit_date})")
             try:
-                zip_data = get_document(doc_id)
-                if isinstance(zip_data, bytes) and len(zip_data) > 0:
-                    st.download_button(
-                        label=f"⬇ {filer} のCSV ZIPをダウンロード",
-                        data=zip_data,
-                        file_name=file_name,
-                        mime="application/zip"
-                    )
+                zip_bytes = get_document(doc_id)
+                df = extract_csv_from_zip(zip_bytes)
+                if df.empty:
+                    st.warning("CSVデータが読み込めませんでした")
+                    continue
+                metrics = extract_financial_metrics(df)
+                if "エラー" in metrics:
+                    st.error(metrics["エラー"])
                 else:
-                    st.error(f"{filer} のZIPデータが取得できませんでした。")
+                    st.write("#### 抽出された財務指標：")
+                    st.dataframe(pd.DataFrame(metrics.items(), columns=["指標", "金額"]))
+                # ダウンロード
+                st.download_button(
+                    label="⬇ ZIPをダウンロード",
+                    data=zip_bytes,
+                    file_name=f"{doc_id}_{filer}.zip",
+                    mime="application/zip"
+                )
             except Exception as e:
-                st.error(f"{filer} のデータ取得に失敗しました: {e}")
+                st.error(f"処理中にエラーが発生しました: {e}")
