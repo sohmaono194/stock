@@ -54,7 +54,7 @@ def sanitize_filename(name: str) -> str:
     return re.sub(r'[^a-zA-Z0-9._-]', '_', name)
 
 # --- UI構成 ---
-st.title("\ud83d\udcc4 EDINET 開示書類 検索＆ダウンロード")
+st.title("📄 EDINET 開示書類 検索＆ダウンロード")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -65,7 +65,7 @@ with col2:
 edinet_codes_input = st.text_input("EDINETコード（カンマ区切りで複数指定可、例：E03614,E03615）")
 doc_type_codes_input = st.text_input("書類種別コード（例：140,160）")
 
-if st.button("\ud83d\udd0d 検索実行"):
+if st.button("🔍 検索実行"):
     if start_date > end_date:
         st.error("開始日は終了日より前にしてください")
         st.stop()
