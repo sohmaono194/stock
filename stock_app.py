@@ -8,6 +8,7 @@ from typing import List, Dict, Union
 from dotenv import load_dotenv
 import zipfile
 import io
+import re
 
 # --- 環境変数ロード ---
 load_dotenv()
@@ -17,7 +18,7 @@ if not EDINET_API_KEY:
     st.error("`.env` に `EDINET_API_KEY` が設定されていません。")
     st.stop()
 
-# --- EDINET API 基本関数 ---
+# --- ヘルパー関数 ---
 def disclosure_documents(date: Union[str, datetime.date], type: int = 2) -> Dict:
     if isinstance(date, datetime.date):
         date_str = date.strftime('%Y-%m-%d')
@@ -49,8 +50,11 @@ def get_document(doc_id: str) -> bytes:
     with urllib.request.urlopen(full_url) as response:
         return response.read()
 
+def sanitize_filename(name: str) -> str:
+    return re.sub(r'[^a-zA-Z0-9._-]', '_', name)
+
 # --- UI構成 ---
-st.title("📄 EDINET 開示書類 検索＆ダウンロード")
+st.title("\ud83d\udcc4 EDINET 開示書類 検索＆ダウンロード")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -61,7 +65,7 @@ with col2:
 edinet_codes_input = st.text_input("EDINETコード（カンマ区切りで複数指定可、例：E03614,E03615）")
 doc_type_codes_input = st.text_input("書類種別コード（例：140,160）")
 
-if st.button("🔍 検索実行"):
+if st.button("\ud83d\udd0d 検索実行"):
     if start_date > end_date:
         st.error("開始日は終了日より前にしてください")
         st.stop()
@@ -98,15 +102,20 @@ if st.button("🔍 検索実行"):
             })
         st.dataframe(df_results)
 
-        # ダウンロード
         for doc in results:
             doc_id = doc['docID']
             filer = doc.get("filerName", "Unknown")
-            file_name = f"{doc_id}_{filer}.zip".replace(" ", "_")
-            zip_data = get_document(doc_id)
-            st.download_button(
-                label=f"⬇ {filer} のCSV ZIPをダウンロード",
-                data=zip_data,
-                file_name=file_name,
-                mime="application/zip"
-            )
+            file_name = sanitize_filename(f"{doc_id}_{filer}.zip")
+            try:
+                zip_data = get_document(doc_id)
+                if isinstance(zip_data, bytes) and len(zip_data) > 0:
+                    st.download_button(
+                        label=f"⬇ {filer} のCSV ZIPをダウンロード",
+                        data=zip_data,
+                        file_name=file_name,
+                        mime="application/zip"
+                    )
+                else:
+                    st.error(f"{filer} のZIPデータが取得できませんでした。")
+            except Exception as e:
+                st.error(f"{filer} のデータ取得に失敗しました: {e}")
